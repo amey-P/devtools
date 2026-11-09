@@ -1,0 +1,9 @@
+.DS_Store
+*.bak
+node_modules/
+# written by Herdr into mod folders (herdr-app check, --link installs)
+jsconfig.json
+*.d.ts
+.installed.json
+# local agent plans
+.pi/

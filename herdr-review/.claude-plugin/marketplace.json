@@ -1,0 +1,17 @@
+{
+  "name": "herdr-local",
+  "owner": {
+    "name": "Amey Patil"
+  },
+  "metadata": {
+    "description": "Local plugins for the Herdr app"
+  },
+  "plugins": [
+    {
+      "name": "herdr-review",
+      "source": "./integrations/claude",
+      "description": "Review Claude's plans natively in the Herdr app: a pane beside the agent to annotate, approve or send feedback.",
+      "version": "0.3.1"
+    }
+  ]
+}
