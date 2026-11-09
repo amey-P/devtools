@@ -22,7 +22,6 @@ set -euo pipefail
 
 DEFAULT_REPO_URL=""   # set to the remote's URL once there is one
 TARGETS="git minimal sidebar review"
-OWNED_MODS="git space-icons space-tree"   # plus review + review-inbox via herdr-review
 
 usage() { sed -n '2,20p' "$1" | sed 's/^# \{0,1\}//'; }
 
