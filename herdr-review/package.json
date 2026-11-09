@@ -1,6 +1,6 @@
 {
   "name": "herdr-review",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "Review documents and agent plans natively in the Herdr app: the herdr-app mod, a Claude Code plugin and a pi extension, installed from one repo.",
