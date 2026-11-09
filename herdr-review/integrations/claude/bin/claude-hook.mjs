@@ -24,6 +24,9 @@ const out = (decision) => process.stdout.write(JSON.stringify({
   hookSpecificOutput: { hookEventName: "PermissionRequest", decision },
 }));
 
+// What the agent is told comes from the review settings (bridge.prompts, newer bridges); the constants are the fallback.
+const text = bridge.prompts?.() ?? { deny: bridge.DENY_PREFIX, approvedWithNotes: bridge.NOTES_PREFIX };
+
 let result = null;
 try {
   result = await bridge.requestReview({
@@ -40,7 +43,7 @@ if (result.decision === "approve") {
     updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }],
   });
   // Claude's allow carries no message: queue the notes as the next prompt.
-  if (result.notes?.trim()) bridge.sendLater(process.env.HC_TERMINAL_ID, bridge.NOTES_PREFIX + result.notes.trim());
+  if (result.notes?.trim()) bridge.sendLater(process.env.HC_TERMINAL_ID, text.approvedWithNotes + result.notes.trim());
 } else {
-  out({ behavior: "deny", message: bridge.DENY_PREFIX + (result.feedback ?? "").trim() });
+  out({ behavior: "deny", message: text.deny + (result.feedback ?? "").trim() });
 }

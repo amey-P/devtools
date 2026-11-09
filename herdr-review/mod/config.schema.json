@@ -1,0 +1,558 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "herdr-review settings",
+  "description": "<herdr-app home>/data/review/config.json. Holds only what differs from mods/review/config.defaults.json; the review's ⚙ Settings screen writes it.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "place": {
+          "type": "string",
+          "enum": [
+            "float",
+            "right",
+            "down",
+            "tab"
+          ],
+          "description": "float: a floating window · right / down: a split beside the agent · tab: a new tab. $HERDR_REVIEW_PLACE and a per-review place override it.",
+          "default": "float"
+        },
+        "width": {
+          "type": "number",
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            },
+            {
+              "minimum": 200
+            }
+          ],
+          "description": "Floating window width: px (200 or more), or a share of the Herdr window (0 to 1).",
+          "default": 0.6
+        },
+        "height": {
+          "type": "number",
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            },
+            {
+              "minimum": 200
+            }
+          ],
+          "description": "Floating window height: px (200 or more), or a share of the Herdr window (0 to 1).",
+          "default": 0.8
+        },
+        "focus": {
+          "type": "boolean",
+          "description": "The review takes the keyboard when it opens.",
+          "default": true
+        },
+        "arrive": {
+          "type": "string",
+          "enum": [
+            "open",
+            "inbox"
+          ],
+          "description": "open: a new review opens where place says · inbox: a toast, and it waits in the review inbox.",
+          "default": "open"
+        }
+      },
+      "description": "Where and how a review opens."
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "font": {
+          "type": "string",
+          "description": "Font family for the review and inbox (\"\" = the theme's). Code blocks keep the theme's code font.",
+          "default": ""
+        },
+        "textSize": {
+          "type": "number",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 9,
+              "maximum": 24
+            }
+          ],
+          "description": "Document text size in px (0 = the theme's). Notes and the sidebar scale with it.",
+          "default": 0
+        },
+        "contentWidth": {
+          "type": "number",
+          "minimum": 400,
+          "maximum": 4000,
+          "description": "The widest the document column gets, in px.",
+          "default": 860
+        },
+        "sidebarWidth": {
+          "type": "number",
+          "minimum": 200,
+          "maximum": 800,
+          "description": "Width of the annotations sidebar, in px.",
+          "default": 320
+        },
+        "sidebar": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "open",
+            "closed"
+          ],
+          "description": "Whether the sidebar shows, until toggled (the toggle is remembered): auto opens it when the window is wide.",
+          "default": "auto"
+        },
+        "readingTime": {
+          "type": "boolean",
+          "description": "Show \"N min read\" above the document.",
+          "default": true
+        }
+      },
+      "description": "How the review and the inbox look."
+    },
+    "prompts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deny": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Before your feedback when a plan is sent back.",
+          "default": [
+            "YOUR PLAN WAS NOT APPROVED.",
+            "",
+            "You MUST revise the plan to address ALL of the feedback below before submitting it again.",
+            "Do not resubmit the same plan unchanged.",
+            "",
+            ""
+          ]
+        },
+        "approvedWithNotes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Before your notes when a plan is approved with notes.",
+          "default": [
+            "Plan approved, with these notes to follow while implementing:",
+            "",
+            ""
+          ]
+        },
+        "feedback": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "intro": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "{subject}: what was reviewed · {count}: e.g. \"3 pieces\".",
+              "default": "I've reviewed {subject} and have {count} of feedback:"
+            },
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Plan Feedback"
+                },
+                "subject": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "this plan"
+                }
+              },
+              "description": "For a plan."
+            },
+            "reply": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Feedback on your last reply"
+                },
+                "subject": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "your last reply"
+                }
+              },
+              "description": "For an agent's last reply."
+            },
+            "file": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Feedback on {name}"
+                },
+                "subject": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "`{path}`"
+                }
+              },
+              "description": "For a file or an agent's review request. {name}: file name or title · {path}: file path."
+            },
+            "sections": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "remove": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Remove this"
+                },
+                "change": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Change this"
+                },
+                "on": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "description": "A comment. {quote}: the start of the annotated text.",
+                  "default": "Feedback on: \"{quote}\""
+                },
+                "general": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "General feedback"
+                },
+                "generalOnly": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Feedback"
+                }
+              },
+              "description": "Section headings, one per annotation."
+            }
+          },
+          "description": "The feedback markdown."
+        },
+        "notes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Implementation notes"
+                },
+                "intro": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Notes on the approved plan:"
+                }
+              }
+            },
+            "other": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Notes"
+                },
+                "intro": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Approved, with these notes:"
+                }
+              }
+            }
+          },
+          "description": "Approve with notes: the notes' heading and intro."
+        },
+        "pi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "planMode": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Told to pi when plan mode starts. {tool}: the submit tool.",
+              "default": [
+                "You are in PLAN MODE. Deeply understand the problem and produce a plan for review before changing anything.",
+                "- Explore the code thoroughly before proposing anything. Do not assume.",
+                "- Writes and edits are limited to markdown files inside the working directory: only write the plan.",
+                "- Write the plan to a markdown file (e.g. PLAN.md), then call {tool} with its path.",
+                "- The user reviews it in the Herdr app and approves it or sends feedback.",
+                "- Feedback is not failure: edit the same file to address ALL of it, then call {tool} again.",
+                "- Do not implement anything until {tool} reports approval."
+              ]
+            },
+            "planOff": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "description": "Told to pi when plan mode ends.",
+              "default": "Plan mode is over. You may now edit files and run commands normally."
+            }
+          },
+          "description": "pi's plan mode."
+        }
+      },
+      "description": "What the agent is told. Text may be a string or an array of lines; {placeholders} are filled in."
+    },
+    "$schema": {
+      "type": "string"
+    },
+    "place": {
+      "type": "string",
+      "enum": [
+        "float",
+        "right",
+        "down",
+        "tab"
+      ],
+      "description": "Old name for window.place.",
+      "default": "float",
+      "deprecated": true
+    },
+    "width": {
+      "type": "number",
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        {
+          "minimum": 200
+        }
+      ],
+      "description": "Old name for window.width.",
+      "default": 0.6,
+      "deprecated": true
+    },
+    "height": {
+      "type": "number",
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        {
+          "minimum": 200
+        }
+      ],
+      "description": "Old name for window.height.",
+      "default": 0.8,
+      "deprecated": true
+    },
+    "focus": {
+      "type": "boolean",
+      "description": "Old name for window.focus.",
+      "default": true,
+      "deprecated": true
+    },
+    "arrive": {
+      "type": "string",
+      "enum": [
+        "open",
+        "inbox"
+      ],
+      "description": "Old name for window.arrive.",
+      "default": "open",
+      "deprecated": true
+    }
+  }
+}

@@ -17,7 +17,9 @@
 // "Use copied text" in the note narrows the quote to that span.
 // Keys while the pane has focus: ⌘Enter saves the open note, else requests changes / sends;
 // ⌘⇧Enter approves (again on the "approve with notes?" prompt: approve with notes); Esc cancels.
-// Bindable commands: review.submit (⌘Enter's behaviour), .send, .approve, .deny, .general, .sidebar, .refresh.
+// Bindable commands: review.submit (⌘Enter's behaviour), .send, .approve, .deny, .general, .sidebar, .refresh, .settings.
+// Settings (⚙ in the header, settings.js): the window, the look (ui.*) and what the agent is told (prompts.*), saved to
+// <app home>/data/review/config.json; every open review re-reads it when it changes (watchConfig).
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
 import * as fs from "fs/promises";
@@ -29,9 +31,10 @@ import { splitBlocks, plain } from "./blocks.js";
 import { toMarkdown, ordered } from "./feedback.js";
 import {
   AGENT_NAMES, base, safe, green, tint, clip, readJson, plural, ago, readConfig, stopPress, store, icon, wash, dot, badge, btn,
-  spool, isReviewId, openReviewWindow, openInboxAction,
+  spool, isReviewId, openReviewWindow, openInboxAction, scaler, withFont, fillText,
 } from "./ui.js";
 import { Inbox } from "./inbox.js";
+import { Settings } from "./settings.js";
 
 const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST" };
 const MARKDOWN = /\.(md|mdx|markdown|txt|text)$/i;
@@ -56,6 +59,8 @@ const WIDE = 940;
 export default class Review extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    // The settings as their own floating window (settings.js).
+    if (p.settings && p.float) { this.settingsWindow = new Settings(p.overlay ?? null, cx); return; }
     // mod.open with no props: the launcher (see the top of this file).
     if (p.overlay && !p.id && !p.kind && !p.float) {
       this.launcher = true;
@@ -94,14 +99,19 @@ export default class Review extends View {
     this.side = store.get("side"); // "1" | "0" | null (null: open when wide)
     this.sideTab = "notes";    // notes | preview
     this.lastKey = 0;          // dedupes a chord that reaches us twice (key handler + bound command)
+    this.sz = scaler(null);    // text size, scaled by the ui.textSize setting
+    this.settings = null;      // the settings screen, while it's shown in place of the document
 
     if (!this.dir) { this.error = "Nothing to review: give props {id}, {kind: \"file\", file} or {kind: \"reply\"}."; this.status = "cancelled"; return; }
 
     cx.spawn(async (cx) => {
-      await this.load();
+      // A failed load says so instead of showing "Loading…" for good.
+      try { await this.load(); }
+      catch (e) { this.error = `Couldn't open this review: ${e?.message ?? e}`; this.status = "cancelled"; this.req = null; this.launch = null; cx.notify(); return; }
       if (this.id && this.status === "open") this.markSeen({ opened_at: Date.now() });
       cx.notify();
-      if (this.cfg?.focus !== false) this.h.focus();
+      if (this.cfg?.window?.focus !== false) this.h.focus();
+      this.watchConfig(cx);
       if (this.id) this.watchSpool(cx);
       if (this.liveFile) this.watchFile(cx);
       if (this.kind === "reply") this.watchReplies(cx);
@@ -117,6 +127,7 @@ export default class Review extends View {
         else if (c === "general") this.startEdit(null, "general", cx);
         else if (c === "sidebar") this.toggleSide(cx);
         else if (c === "refresh") this.reloadContent(cx, true);
+        else if (c === "settings") this.toggleSettings(cx);
         cx.notify();
       }
     });
@@ -131,12 +142,12 @@ export default class Review extends View {
     const queue = `${spool}/.float`;
     let ids = [];
     try { ids = (await fs.readdir(queue)).filter(isReviewId); } catch {}
-    const size = { width: cfg.width, height: cfg.height };
+    const size = { width: cfg.window.width, height: cfg.window.height };
     for (const id of ids) {
       try { await fs.unlink(`${queue}/${id}`); } catch { continue; } // another launcher took it
       const req = await readJson(`${spool}/${id}/request.json`);
       if (!req) continue;
-      if (cfg.arrive === "inbox") {
+      if (cfg.window.arrive === "inbox") {
         // Quiet arrival: a toast, and the review waits in the inbox until it's opened.
         const who = AGENT_NAMES[req.agent] ?? AGENT_NAMES[req.parent?.app] ?? "An agent";
         notify({ title: req.kind === "plan" ? `Plan from ${who}` : `Review request from ${who}`,
@@ -150,9 +161,9 @@ export default class Review extends View {
     if (!ids.length) {
       const f = focused();
       const reply = { kind: "reply", pane: f?.pane ?? null, tab: f?.tab ?? null };
-      if (cfg.place === "float") openOverlay({ kind: "window", mod: "review", props: { ...reply, float: true }, key: `review-reply-${safe(f?.tab ?? "")}`, ...size });
-      else if (cfg.place === "tab") run("tab.new", { space: f?.space, mod: "review", props: reply, name: "Review" });
-      else run("pane.split", { direction: cfg.place === "down" ? "down" : "right", mod: "review", props: reply });
+      if (cfg.window.place === "float") openOverlay({ kind: "window", mod: "review", props: { ...reply, float: true }, key: `review-reply-${safe(f?.tab ?? "")}`, ...size });
+      else if (cfg.window.place === "tab") run("tab.new", { space: f?.space, mod: "review", props: reply, name: "Review" });
+      else run("pane.split", { direction: cfg.window.place === "down" ? "down" : "right", mod: "review", props: reply });
     }
     closeOverlay(self);
   }
@@ -172,7 +183,9 @@ export default class Review extends View {
 
   async close() {
     if (this.launcher) return;
+    if (this.settingsWindow) { this.settingsWindow.release(); return; }
     if (this.inbox) { this.inbox.close(); return; }
+    this.settings?.release();
     this.editing?.state.release();
     // Closed without a decision: later. The agent keeps waiting and the review stays in the inbox
     // (Dismiss is the way to let the agent fall back to its own prompt).
@@ -244,6 +257,7 @@ export default class Review extends View {
 
   async load() {
     this.cfg = await readConfig();
+    this.sz = scaler(this.cfg);
     if (this.id) {
       this.req = await readJson(`${this.dir}/request.json`);
       if (!this.req) { this.error = "This review is gone."; this.status = "cancelled"; return; }
@@ -323,6 +337,34 @@ export default class Review extends View {
     if (this.setContent(text ?? "") || manual) cx?.notify();
   }
 
+  /** Settings saved anywhere (the settings screen, the CLI) apply to this open review. */
+  watchConfig(cx) {
+    const dir = `${appHome()}/data/review`;
+    cx.spawn(async (cx) => {
+      let last = JSON.stringify(this.cfg);
+      for (;;) {
+        try { await watchFolder(dir); } catch { return; }
+        const cfg = await readConfig();
+        const now = JSON.stringify(cfg);
+        if (now === last) continue;
+        last = now;
+        this.cfg = cfg;
+        this.sz = scaler(cfg);
+        cx.notify();
+      }
+    });
+  }
+
+  /** The ⚙ button: the settings screen in place of the document, and back. */
+  toggleSettings(cx) {
+    if (this.settings) { this.settings.release(); this.settings = null; this.h.focus(); }
+    else {
+      if (this.editing) this.saveEdit(cx);
+      this.settings = new Settings(null, cx, { onClose: () => { this.settings?.release(); this.settings = null; this.h.focus(); cx.notify(); } });
+    }
+    cx.notify();
+  }
+
   watchSpool(cx) {
     cx.spawn(async (cx) => {
       for (;;) {
@@ -379,11 +421,19 @@ export default class Review extends View {
   /** How the feedback is headed for this kind of review. */
   get framing() {
     const k = this.kind;
-    if (k === "plan") return { heading: "Plan Feedback", subject: "this plan" };
-    if (k === "reply") return { heading: "Feedback on your last reply", subject: "your last reply" };
+    const fb = this.cfg?.prompts?.feedback;
+    const labels = fb ? { intro: fb.intro, sections: fb.sections } : undefined;
+    if (k === "plan" || k === "reply") {
+      const f = fb?.[k] ?? (k === "plan" ? { heading: "Plan Feedback", subject: "this plan" } : { heading: "Feedback on your last reply", subject: "your last reply" });
+      return { heading: fillText(f.heading), subject: fillText(f.subject), labels };
+    }
     const name = this.file ? base(this.file) : this.title;
-    const subject = this.file ? `\`${this.file.startsWith(home()) ? "~" + this.file.slice(home().length) : this.file}\`` : `"${this.title}"`;
-    return { heading: `Feedback on ${name}`, subject };
+    const path = this.file ? (this.file.startsWith(home()) ? "~" + this.file.slice(home().length) : this.file) : null;
+    const f = fb?.file ?? { heading: "Feedback on {name}", subject: "`{path}`" };
+    // No file (an ask): the title, in quotes, stands in for the path.
+    const vars = { name, path: path ?? this.title };
+    const subject = path ? fillText(f.subject, vars) : `"${this.title}"`;
+    return { heading: fillText(f.heading, vars), subject, labels };
   }
 
   get feedback() { return toMarkdown(this.anns, this.framing); }
@@ -470,7 +520,11 @@ export default class Review extends View {
     cx.notify();
   }
 
-  get showSide() { return this.side === null ? this.width >= WIDE : this.side === "1"; }
+  get showSide() {
+    if (this.side !== null) return this.side === "1";
+    const pref = this.cfg?.ui?.sidebar ?? "auto";
+    return pref === "auto" ? this.width >= WIDE : pref === "open";
+  }
 
   // ---- decisions -------------------------------------------------------------
 
@@ -538,9 +592,9 @@ export default class Review extends View {
     if (this.editing) this.saveEdit(cx);
     if (this.anns.length && !mode) { this.confirm = true; this.h.focus(); cx.notify(); return; }
     this.confirm = false;
-    const notes = mode === "notes" ? toMarkdown(this.anns, this.kind === "plan"
-      ? { heading: "Implementation notes", intro: "Notes on the approved plan:" }
-      : { heading: "Notes", intro: "Approved, with these notes:" }) : "";
+    const n = this.cfg?.prompts?.notes?.[this.kind === "plan" ? "plan" : "other"]
+      ?? (this.kind === "plan" ? { heading: "Implementation notes", intro: "Notes on the approved plan:" } : { heading: "Notes", intro: "Approved, with these notes:" });
+    const notes = mode === "notes" ? toMarkdown(this.anns, { heading: fillText(n.heading), intro: fillText(n.intro), labels: this.framing.labels }) : "";
     cx.spawn(async (cx) => this.decide("approve", cx, notes ? { notes } : {}));
   }
 
@@ -611,6 +665,7 @@ export default class Review extends View {
   }
 
   onKey(e, cx) {
+    if (this.settings) return; // the settings screen has its own keys
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
     if (k === "escape") {
       if (this.editing) this.cancelEdit(cx);
@@ -626,9 +681,10 @@ export default class Review extends View {
 
   render(cx) {
     if (this.launcher) return div();
+    if (this.settingsWindow) return withFont(div().size_full(), this.settingsWindow.saved).child(this.settingsWindow.render(theme()));
     if (this.inbox) return this.inbox.render(cx);
     const t = theme();
-    const root = v_flex().id("review").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
+    const root = withFont(v_flex(), this.cfg).id("review").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 1) { this.width = size.width; cx.notify(); } })
       .on_key_down((e, cx) => this.onKey(e, cx))
       // Clicks that land outside text and the editor give the keyboard back to the review.
@@ -637,6 +693,7 @@ export default class Review extends View {
     if (!this.req && !this.launch) return root.items_center().justify_center().child(div().text_size(13).text_color(t.muted).child(this.error ?? "Nothing to review."));
     const wide = this.width >= WIDE;
     const side = this.showSide;
+    if (this.settings) return root.child(this.renderHeader(t)).child(div().flex_1().min_h(0).child(this.settings.render(t)));
     return root
       .child(this.renderHeader(t))
       .child(h_flex().flex_1().min_h(0).relative()
@@ -712,7 +769,8 @@ export default class Review extends View {
             variant: "outline", color: plan ? t.blocked : t.accent, kbd: compact ? null : "⌘↵", onClick: (cx) => this.deny(cx) }))
           .child(btn("pr-approve", t, { ic: "check", label: plan ? "Approve" : "Looks good", variant: "solid", color: green(t), kbd: compact ? null : "⌘⇧↵",
             onClick: (cx) => this.approve(cx) }))))
-      .child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) }))
+      .when(!this.settings, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
+      .child(btn("pr-settings", t, { ic: "settings", active: !!this.settings, tooltip: this.settings ? "Back to the review" : "Settings", onClick: (cx) => this.toggleSettings(cx) }))
       .when(open && this.mode === "decision" && !!this.id, (el) => el.child(btn("pr-dismiss", t, { label: compact ? null : "Dismiss", ic: compact ? "trash" : null,
         tooltip: `Stop waiting here: ${this.agentName} falls back to its own prompt`, onClick: (cx) => this.dismiss(cx) })))
       .when(this.floating, (el) => el.child(btn("pr-close", t, { ic: "x",
@@ -751,11 +809,11 @@ export default class Review extends View {
     const meta = (ic, text) => h_flex().gap(5).items_center().flex_none().child(icon(ic, 11)).child(text);
     return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar()
       .child(div().absolute().top(0).left(0).right(0).h(220).child(wash(tint(t.accent, "12"), tint(t.canvas, "00"), 180)))
-      .child(v_flex().relative().w_full().max_w(860).mx_auto().px(narrow ? 10 : 28).pt(narrow ? 12 : 26).pb(110).gap(14)
+      .child(v_flex().relative().w_full().max_w(this.cfg?.ui?.contentWidth ?? 860).mx_auto().px(narrow ? 10 : 28).pt(narrow ? 12 : 26).pb(110).gap(14)
         .when(!open, (el) => el.child(this.renderResult(t)))
         .when(open && this.mode === "send" && !!this.lastSent && !this.anns.length, (el) => el.child(this.renderSent(t)))
-        .child(h_flex().px(4).gap(14).items_center().text_size(11).text_color(t.dim).flex_wrap()
-          .child(div().text_size(10.5).font_semibold().text_color(t.accent).child(DOC_LABEL[this.kind] ?? "DOCUMENT"))
+        .child(h_flex().px(4).gap(14).items_center().text_size(this.sz(11)).text_color(t.dim).flex_wrap()
+          .child(div().text_size(this.sz(10.5)).font_semibold().text_color(t.accent).child(DOC_LABEL[this.kind] ?? "DOCUMENT"))
           .when(!!this.file, (el) => el.child(div().min_w(0).truncate().text_color(t.dim).child(
             this.file.startsWith(home()) ? "~" + this.file.slice(home().length) : this.file)))
           .when(this.kind === "reply" && this.replySource === "screen", (el) => el.child(div().flex_none().text_color(t.dim)
@@ -763,11 +821,11 @@ export default class Review extends View {
           .child(div().flex_1())
           .when(sections > 0, (el) => el.child(meta("sidebar", plural(sections, "section"))))
           .when(steps > 0, (el) => el.child(meta("check", plural(steps, "step"))))
-          .child(meta("comment", `${Math.max(1, Math.round(words / 230))} min read`)))
+          .when(this.cfg?.ui?.readingTime !== false, (el) => el.child(meta("comment", `${Math.max(1, Math.round(words / 230))} min read`))))
         .when(general.length > 0 || editingGeneral, (el) => el.child(v_flex().relative().gap(8).p(14).rounded(12)
           .bg(t.background).border_1().border_color(tint(t.accent, "55")).shadow_sm()
           .child(wash(tint(t.accent, "14"), tint(t.background, "00"), 90))
-          .child(h_flex().relative().gap(8).items_center().text_size(11).font_semibold().text_color(t.accent)
+          .child(h_flex().relative().gap(8).items_center().text_size(this.sz(11)).font_semibold().text_color(t.accent)
             .child(badge("globe", t.accent, 20, 11)).child("GLOBAL COMMENTS"))
           .children(general.map((a) => this.renderNote(a, t)))
           .when(editingGeneral, (el) => el.child(this.renderEditor(t)))))
@@ -777,7 +835,8 @@ export default class Review extends View {
           // Accent ribbon across the top of the page.
           .child(div().relative().w_full().h(3).flex_none().child(wash(t.accent, green(t), 90)))
           .child(v_flex().w_full().pl(narrow ? 8 : 18).pr(narrow ? 12 : 40).py(narrow ? 16 : 34).gap(2)
-            .when(!this.blocks.length, (el) => el.child(div().py(30).text_center().text_size(13).text_color(t.dim).whitespace_normal()
+            .when(this.cfg?.ui?.textSize > 0, (el) => el.text_size(this.cfg.ui.textSize))
+            .when(!this.blocks.length, (el) => el.child(div().py(30).text_center().text_size(this.sz(13)).text_color(t.dim).whitespace_normal()
               .child(this.error ?? (this.kind === "reply" ? `No reply from ${this.agentName} yet. It appears here after its next turn.` : "Nothing to review."))))
             .children(this.blocks.map((b, i) => this.renderBlock(b, i, t))))));
   }
@@ -791,8 +850,8 @@ export default class Review extends View {
       .child(div().relative().w(30).h(30).flex_none().rounded_full().bg(tint(c, "26")).text_color(c)
         .flex().items_center().justify_center().child(icon("send", 14)))
       .child(v_flex().relative().flex_1().min_w(0).gap(2)
-        .child(div().text_size(13).font_semibold().text_color(c).child(`Sent ${plural(s.count ?? 1, "note")} to ${this.agentName}`))
-        .child(div().text_size(12).text_color(t.muted).whitespace_normal()
+        .child(div().text_size(this.sz(13)).font_semibold().text_color(c).child(`Sent ${plural(s.count ?? 1, "note")} to ${this.agentName}`))
+        .child(div().text_size(this.sz(12)).text_color(t.muted).whitespace_normal()
           .child(this.kind === "reply" ? "Annotate its next reply the same way (it loads here when it arrives)."
             : this.liveFile ? "This file reloads when it changes: annotate it again for another round." : "Add more notes for another round.")))
       .child(btn("pr-sent-copy", t, { ic: "copy", tooltip: "Copy what was sent", onClick: (cx) => {
@@ -825,8 +884,8 @@ export default class Review extends View {
         .child(div().absolute().top(5).left(5).w(34).h(34).rounded_full().bg(tint(color, "30")).text_color(color)
           .flex().items_center().justify_center().child(icon(ic, 18))))
       .child(v_flex().relative().gap(3).min_w(0)
-        .child(div().text_size(15).font_semibold().text_color(color).child(title))
-        .child(div().text_size(12.5).text_color(t.muted).child(body)));
+        .child(div().text_size(this.sz(15)).font_semibold().text_color(color).child(title))
+        .child(div().text_size(this.sz(12.5)).text_color(t.muted).child(body)));
   }
 
   renderBlock(b, i, t) {
@@ -845,7 +904,7 @@ export default class Review extends View {
     const toolbar = h_flex().absolute().top(heading ? 6 : 2).right(4).h(28).px(3).gap(1).items_center().rounded(8)
       .bg(t.popover).border_1().border_color(t.border).shadow_md()
       .children(["comment", "delete", "replace"].map((k) => h_flex().id(`tb-${k}-${i}`).h(22).px(7).gap(5).items_center().rounded(5)
-        .text_size(11.5).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
+        .text_size(this.sz(11.5)).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
         .hover((s) => s.bg(t.hover).text_color(k === "delete" ? t.blocked : t.foreground))
         .on_click((_e, cx) => this.startEdit(i, k, cx))
         .child(icon(KINDS[k].icon, 13))
@@ -868,7 +927,7 @@ export default class Review extends View {
     const mark = notes.length
       ? div().w(18).h(18).rounded_full().bg(tint(accent ?? this.color(notes[0].type, t), "28"))
         .text_color(accent ?? this.color(notes[0].type, t)).flex().items_center().justify_center()
-        .text_size(10).font_semibold().child(String(notes.length))
+        .text_size(this.sz(10)).font_semibold().child(String(notes.length))
       : div().w(6).h(6).rounded_full().when(hover && open, (el) => el.bg(t.dim));
     const gutter = div().w(22).flex_none().flex().justify_center().pt(heading ? 10 : 6).child(mark);
 
@@ -889,7 +948,7 @@ export default class Review extends View {
   pill(type, t) {
     const c = this.color(type, t);
     return h_flex().flex_none().h(18).px(6).gap(4).items_center().rounded(5).bg(tint(c, "22")).text_color(c)
-      .text_size(10).font_semibold().child(icon(KINDS[type].icon, 11)).child(KINDS[type].label.toUpperCase());
+      .text_size(this.sz(10)).font_semibold().child(icon(KINDS[type].icon, 11)).child(KINDS[type].label.toUpperCase());
   }
 
   renderNote(a, t) {
@@ -906,18 +965,18 @@ export default class Review extends View {
       .child(div().absolute().top(8).bottom(8).left(0).w(3).rounded(2).bg(color))
       .child(h_flex().gap(8).items_center()
         .child(badge(KINDS[a.type].icon, color, 20, 11))
-        .child(div().text_size(11.5).font_semibold().text_color(color).child(KINDS[a.type].verb))
-        .child(div().flex_1().text_size(11).text_color(t.dim).child(ago(a.created ?? Date.now())))
+        .child(div().text_size(this.sz(11.5)).font_semibold().text_color(color).child(KINDS[a.type].verb))
+        .child(div().flex_1().text_size(this.sz(11)).text_color(t.dim).child(ago(a.created ?? Date.now())))
         .when(open, (el) => el.child(div().id(`rm-${a.id}`).w(22).h(22).rounded(5).flex().items_center().justify_center()
           .text_color(t.dim).cursor_pointer().tooltip("Remove annotation")
           .hover((s) => s.bg(t.hover).text_color(t.blocked))
           .on_click((_e, cx) => { cx.stop_propagation(); this.remove(a.id, cx); })
           .child(icon("trash", 13)))))
       .when(!!partial, (el) => el.child(div().pl(8).border_l_2().border_color(tint(color, "88"))
-        .text_size(12).italic().text_color(t.muted).whitespace_normal().child(clip(a.quote, 200))))
-      .when(a.type === "replace" && !!partial, (el) => el.child(div().text_size(12.5).px(8).py(4).rounded(5)
+        .text_size(this.sz(12)).italic().text_color(t.muted).whitespace_normal().child(clip(a.quote, 200))))
+      .when(a.type === "replace" && !!partial, (el) => el.child(div().text_size(this.sz(12.5)).px(8).py(4).rounded(5)
         .bg(tint(green(t), "16")).text_color(t.foreground).whitespace_normal().child(a.text)))
-      .when(text !== "", (el) => el.child(div().text_size(13).whitespace_normal()
+      .when(text !== "", (el) => el.child(div().text_size(this.sz(13)).whitespace_normal()
         .text_color(a.type === "replace" ? t.dim : t.foreground).child(text)));
   }
 
@@ -930,12 +989,12 @@ export default class Review extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .child(h_flex().gap(8).items_center()
         .child(this.pill(e.type, t))
-        .child(div().text_size(12).text_color(t.muted).child(e.ann ? "Editing annotation" : e.type === "delete" ? "Mark this block for deletion" : "New annotation"))
+        .child(div().text_size(this.sz(12)).text_color(t.muted).child(e.ann ? "Editing annotation" : e.type === "delete" ? "Mark this block for deletion" : "New annotation"))
         .child(div().flex_1()))
       .when(!!partial, (el) => el.child(div().pl(8).border_l_2().border_color(tint(color, "88"))
-        .text_size(12).italic().text_color(t.muted).whitespace_normal().child(clip(e.quote, 200))))
+        .text_size(this.sz(12)).italic().text_color(t.muted).whitespace_normal().child(clip(e.quote, 200))))
       .child(div().p(2).rounded(10).bg(tint(color, "22"))
-        .child(Textarea.new(e.state).p(10).rounded(8).border_1().border_color(tint(color, "88")).bg(t.background).text_size(13)))
+        .child(Textarea.new(e.state).p(10).rounded(8).border_1().border_color(tint(color, "88")).bg(t.background).text_size(this.sz(13))))
       .child(h_flex().gap(6).items_center()
         .when(e.block !== null, (el) => el.child(btn("pr-e-copied", t, { ic: "copy", label: "Use copied text",
           tooltip: "Select part of the block, ⌘C, then narrow the quote to it", onClick: (cx) => this.useCopied(cx) })))
@@ -948,12 +1007,12 @@ export default class Review extends View {
   renderSide(t) {
     const list = ordered(this.anns);
     const tab = (id, label, count) => h_flex().id(`pr-tab-${id}`).flex_1().h(26).gap(6).justify_center().items_center().rounded(6)
-      .text_size(12).font_medium().cursor_pointer().text_color(this.sideTab === id ? t.foreground : t.muted)
+      .text_size(this.sz(12)).font_medium().cursor_pointer().text_color(this.sideTab === id ? t.foreground : t.muted)
       .when(this.sideTab === id, (el) => el.bg(t.background).shadow_sm())
       .hover((s) => s.text_color(t.foreground))
       .on_click((_e, cx) => { this.sideTab = id; cx.notify(); })
       .child(label)
-      .when(!!count, (el) => el.child(div().h(16).px(5).rounded(8).flex().items_center().text_size(10).font_semibold()
+      .when(!!count, (el) => el.child(div().h(16).px(5).rounded(8).flex().items_center().text_size(this.sz(10)).font_semibold()
         .bg(tint(t.accent, "26")).text_color(t.accent).child(String(count))));
     const stat = (k) => {
       const c = this.color(k, t);
@@ -961,10 +1020,10 @@ export default class Review extends View {
       return v_flex().flex_1().gap(2).py(8).items_center().rounded(8).bg(n ? tint(c, "14") : t.surface)
         .border_1().border_color(n ? tint(c, "44") : t.border)
         .child(h_flex().gap(4).items_center().text_color(n ? c : t.dim).child(icon(KINDS[k].icon, 12))
-          .child(div().text_size(15).font_semibold().child(String(n))))
-        .child(div().text_size(10).text_color(t.dim).child(KINDS[k].label));
+          .child(div().text_size(this.sz(15)).font_semibold().child(String(n))))
+        .child(div().text_size(this.sz(10)).text_color(t.dim).child(KINDS[k].label));
     };
-    return v_flex().id("pr-side").w(320).flex_none().h_full().bg(t.chrome).border_l_1().border_color(t.border)
+    return v_flex().id("pr-side").w(this.cfg?.ui?.sidebarWidth ?? 320).flex_none().h_full().bg(t.chrome).border_l_1().border_color(t.border)
       .child(h_flex().h(48).flex_none().px(10).gap(6).items_center().border_b_1().border_color(t.border)
         .child(h_flex().flex_1().p(3).gap(2).rounded(8).bg(t.surface).border_1().border_color(t.border)
           .child(tab("notes", "Annotations", list.length))
@@ -979,9 +1038,9 @@ export default class Review extends View {
   renderList(list, t) {
     const open = this.status === "open";
     if (!list.length) {
-      return v_flex().p(18).gap(10).items_center().text_size(12.5).text_color(t.dim)
+      return v_flex().p(18).gap(10).items_center().text_size(this.sz(12.5)).text_color(t.dim)
         .child(div().mt(24).w(40).h(40).rounded_full().bg(t.raised).flex().items_center().justify_center().text_color(t.muted).child(icon("comment", 18)))
-        .child(div().text_size(13).font_semibold().text_color(t.muted).child("No annotations yet"))
+        .child(div().text_size(this.sz(13)).font_semibold().text_color(t.muted).child("No annotations yet"))
         .child(div().text_center().whitespace_normal().child(this.mode === "send"
           ? "Hover a block and choose Comment, Delete or Replace, then Send."
           : `Hover a block and choose Comment, Delete or Replace. Approve when ${this.kind === "plan" ? "the plan" : "it"} looks right.`));
@@ -998,18 +1057,18 @@ export default class Review extends View {
         .when(!open, (el) => el.on_click((_e, cx) => { this.selected = a.id; cx.notify(); }))
         .child(h_flex().gap(8).items_center()
           .child(this.pill(a.type, t))
-          .when(!!a.stale, (el) => el.child(div().flex_none().h(18).px(6).rounded(5).flex().items_center().text_size(10).font_semibold()
+          .when(!!a.stale, (el) => el.child(div().flex_none().h(18).px(6).rounded(5).flex().items_center().text_size(this.sz(10)).font_semibold()
             .bg(t.raised).text_color(t.dim).tooltip("Its text is no longer in the document. It is still sent, with the quote.").child("STALE")))
-          .child(div().flex_1().text_size(11).text_color(t.dim).child(ago(a.created ?? Date.now())))
+          .child(div().flex_1().text_size(this.sz(11)).text_color(t.dim).child(ago(a.created ?? Date.now())))
           .when(open, (el) => el.child(div().id(`srm-${a.id}`).w(22).h(22).rounded(5).flex().items_center().justify_center()
             .text_color(t.dim).cursor_pointer().tooltip("Remove annotation")
             .hover((s) => s.bg(t.hover).text_color(t.blocked))
             .on_click((_e, cx) => { cx.stop_propagation(); this.remove(a.id, cx); })
             .child(icon("trash", 13)))))
-        .child(div().pl(8).border_l_2().border_color(tint(color, "88")).text_size(11.5).italic().text_color(t.muted)
+        .child(div().pl(8).border_l_2().border_color(tint(color, "88")).text_size(this.sz(11.5)).italic().text_color(t.muted)
           .whitespace_normal().child(where))
-        .when(a.text.trim() !== "", (el) => el.child(div().text_size(12.5).whitespace_normal()
-          .when(a.type === "replace", (e) => e.font_family(settings().font_family).text_size(12).text_color(green(t)))
+        .when(a.text.trim() !== "", (el) => el.child(div().text_size(this.sz(12.5)).whitespace_normal()
+          .when(a.type === "replace", (e) => e.font_family(settings().font_family).text_size(this.sz(12)).text_color(green(t)))
           .child(clip(a.text, 260))));
     }));
   }
@@ -1017,15 +1076,15 @@ export default class Review extends View {
   renderPreview(t) {
     const md = this.feedback;
     if (!md) {
-      return v_flex().p(18).gap(8).items_center().text_size(12.5).text_color(t.dim)
+      return v_flex().p(18).gap(8).items_center().text_size(this.sz(12.5)).text_color(t.dim)
         .child(div().mt(24).text_center().whitespace_normal().child(`The feedback the agent receives appears here once you annotate ${this.kind === "plan" ? "the plan" : "it"}.`));
     }
     return v_flex().p(12).gap(10)
       .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().text_size(11.5).text_color(t.dim).child(this.mode === "send" ? `Typed into ${this.agentName} on Send`
+        .child(div().flex_1().text_size(this.sz(11.5)).text_color(t.dim).child(this.mode === "send" ? `Typed into ${this.agentName} on Send`
           : this.kind === "plan" ? "Sent to the agent on Request changes" : "Sent to the agent on Send feedback"))
         .child(btn("pr-prev-copy", t, { ic: "copy", label: "Copy", onClick: (cx) => this.copyFeedback(cx) })))
-      .child(div().p(12).rounded(8).bg(t.background).border_1().border_color(t.border).text_size(12.5)
+      .child(div().p(12).rounded(8).bg(t.background).border_1().border_color(t.border).text_size(this.sz(12.5))
         .child(TextView.markdown("pr-preview", md).selectable(true)));
   }
 

@@ -28,7 +28,7 @@ import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { loadConfig } from "./config.mjs";
+import { loadConfig, text } from "./config.mjs";
 
 export const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
 export const SPOOL = join(APP_HOME, "data", "review");
@@ -209,11 +209,11 @@ export async function openReview({ kind = "plan", mode = "decision", agent = nul
     // Who asked: shown in the review's header, and kept for when that agent is gone.
     parent: { app: where.entry?.app ?? null, space_name: where.space.name ?? null, tab_name: where.tab.name ?? null,
       name: where.entry?.name ?? null },
-    place: cfg.place,
+    place: cfg.window.place,
   };
   writeFileSync(join(dir, "request.json"), JSON.stringify(request, null, 2));
 
-  if (!(await openPlaced(where, id, dir, kind, cfg.place, cfg.arrive))) { cancel(dir, "could not open"); return null; }
+  if (!(await openPlaced(where, id, dir, kind, cfg.window.place, cfg.window.arrive))) { cancel(dir, "could not open"); return null; }
 
   if (mode === "send") return { decision: "opened", id };
 
@@ -265,8 +265,14 @@ export function sendLater(terminal, text, delayMs = 1500) {
   child.unref();
 }
 
-/** What the agent is told when the plan is sent back. */
-export const DENY_PREFIX =
-  "YOUR PLAN WAS NOT APPROVED.\n\nYou MUST revise the plan to address ALL of the feedback below before submitting it again.\n" +
-  "Do not resubmit the same plan unchanged.\n\n";
-export const NOTES_PREFIX = "Plan approved, with these notes to follow while implementing:\n\n";
+/** What the agent is told, from the settings (config.json `prompts`, see config.mjs): read on every call, so an edit
+ *  applies to the next decision. `deny` goes before the feedback when a plan is sent back; `approvedWithNotes` before
+ *  the notes on an approved plan; `planMode` / `planOff` frame pi's plan mode (`tool`: its submit tool's name). */
+export function prompts({ tool = "submit_plan" } = {}) {
+  const p = loadConfig().prompts;
+  return { deny: text(p.deny), approvedWithNotes: text(p.approvedWithNotes),
+    planMode: text(p.pi.planMode, { tool }), planOff: text(p.pi.planOff, { tool }) };
+}
+// Kept for integrations installed before prompts() (Claude caches its plugin per version).
+export const DENY_PREFIX = prompts().deny;
+export const NOTES_PREFIX = prompts().approvedWithNotes;
