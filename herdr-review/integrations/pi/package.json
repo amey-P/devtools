@@ -1,6 +1,6 @@
 {
   "name": "herdr-review",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "Plan review in the Herdr app for pi: submit_plan opens the plan in a pane beside the agent to annotate, approve or send back.",

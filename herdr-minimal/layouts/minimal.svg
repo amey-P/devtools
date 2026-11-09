@@ -9,7 +9,10 @@
   <rect x="8" y="82" width="20" height="20" rx="6" fill="#a6e3a1" fill-opacity=".12"/><path d="M13 96l5-9 5 9z" fill="none" stroke="#a6e3a1" stroke-width="1.2"/>
   <rect x="8" y="108" width="20" height="20" rx="6" fill="#cba6f7" fill-opacity=".12"/><circle cx="18" cy="118" r="4" fill="none" stroke="#cba6f7" stroke-width="1.2"/>
   <circle cx="28" cy="83" r="3.5" fill="#f9e2af"/>
-  <rect x="8" y="172" width="20" height="20" rx="5" fill="none" stroke="#45475a"/>
+  <rect x="8" y="134" width="20" height="20" rx="5" fill="none" stroke="#45475a"/>
+  <rect x="2" y="160" width="30" height="1" fill="#313244"/>
+  <rect x="8" y="166" width="20" height="12" rx="4" fill="#d97757" fill-opacity=".16"/><rect x="8" y="176" width="14" height="2" rx="1" fill="#f9e2af"/><circle cx="26" cy="168" r="2" fill="#89b4fa"/>
+  <rect x="8" y="182" width="20" height="12" rx="4" fill="#4fb8b2" fill-opacity=".16"/>
   <rect x="44" y="8" width="52" height="16" rx="5" fill="#313244"/>
   <rect x="100" y="8" width="44" height="16" rx="5" fill="#181825"/>
   <rect x="44" y="32" width="268" height="160" rx="7" fill="#11111b" stroke="#89b4fa"/>

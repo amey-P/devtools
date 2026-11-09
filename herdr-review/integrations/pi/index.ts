@@ -18,6 +18,7 @@ const MODE_CHANGED = "mode-manager:changed";
 const MODE_REQUEST = "mode-manager:request";
 const TOOL = "submit_plan";
 
+// Fallbacks: the text normally comes from the review settings (bridge.prompts(), config.json `prompts`).
 const FRAMING = [
   "You are in PLAN MODE. Deeply understand the problem and produce a plan for review before changing anything.",
   "- Explore the code thoroughly before proposing anything. Do not assume.",
@@ -33,6 +34,10 @@ function insideCwd(path, cwd) {
   const full = resolve(cwd, path);
   const rel = relative(cwd, full);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+/** The review settings' agent text (null when the Herdr review isn't installed). Read on each use, so edits apply. */
+async function prompts() {
+  try { return (await import(pathToFileURL(BRIDGE).href)).prompts?.({ tool: TOOL }) ?? null; } catch { return null; }
 }
 const isPlanFile = (path, cwd) => /\.mdx?$/i.test(path ?? "") && insideCwd(path, cwd);
 
@@ -85,11 +90,13 @@ export default function (pi) {
   pi.on("before_agent_start", async () => {
     if (planning() && !framed) {
       framed = true;
-      return { message: { customType: "herdr-review", content: FRAMING, display: false, details: { planning: true } } };
+      const content = (await prompts())?.planMode ?? FRAMING;
+      return { message: { customType: "herdr-review", content, display: false, details: { planning: true } } };
     }
     if (!planning() && offNotice) {
       offNotice = false;
-      return { message: { customType: "herdr-review", content: PLAN_OFF, display: false, details: { planning: false } } };
+      const content = (await prompts())?.planOff ?? PLAN_OFF;
+      return { message: { customType: "herdr-review", content, display: false, details: { planning: false } } };
     }
   });
 
@@ -192,10 +199,11 @@ export default function (pi) {
         leave();
         offNotice = false;
         status(ctx);
-        const notes = result.notes?.trim() ? `\n\n${bridge.NOTES_PREFIX}${result.notes.trim()}` : "";
+        const said = bridge.prompts?.({ tool: TOOL }) ?? { approvedWithNotes: bridge.NOTES_PREFIX, deny: bridge.DENY_PREFIX };
+        const notes = result.notes?.trim() ? `\n\n${said.approvedWithNotes}${result.notes.trim()}` : "";
         return text(`Plan approved. Plan mode is over: implement the plan in ${path} now.${notes}`);
       }
-      if (result.decision === "deny") return text(bridge.DENY_PREFIX + (result.feedback ?? "").trim() + `\n\nEdit ${path}, then call ${TOOL} again.`);
+      if (result.decision === "deny") return text((bridge.prompts?.({ tool: TOOL })?.deny ?? bridge.DENY_PREFIX) + (result.feedback ?? "").trim() + `\n\nEdit ${path}, then call ${TOOL} again.`);
       return text("The user dismissed the review without deciding. Ask them in chat how to proceed.");
     },
   });

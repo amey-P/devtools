@@ -9,11 +9,12 @@
 import { div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { theme, agents, panes, exec, run, notify, watchFolder, closeOverlay } from "herdr";
+import { theme, agents, panes, exec, run, notify, watchFolder, openOverlay, closeOverlay } from "herdr";
 import {
   AGENT_NAMES, green, tint, plural, readJson, ago, readConfig, stopPress, icon, wash, dot, btn,
-  spool, isReviewId, readReview, openReviewWindow,
+  spool, isReviewId, readReview, openReviewWindow, scaler, withFont,
 } from "./ui.js";
+import { SETTINGS_WINDOW } from "./settings.js";
 
 const WEEK = 7 * 86400e3;
 const FILTERS = [["all", "All"], ["plan", "Plans"], ["ask", "Asks"]];
@@ -39,19 +40,26 @@ export class Inbox {
     this.filter = "all";
     this.sel = 0;
     this.closing = false;
-    cx.spawn(async (cx) => {
+    this.sz = scaler(null);
+    cx.spawn(async (cx) => { try {
+      // Without a direct fs call first, this task stalls in the app's runtime and the inbox stays on "Loading…".
+      await fs.exists(spool());
       this.cfg = await readConfig();
+      this.sz = scaler(this.cfg);
       await this.load();
       cx.notify();
       this.h.focus();
       for (;;) {
         try { await watchFolder(spool()); } catch { break; }
+        // The folder holds config.json too: settings saved elsewhere apply here.
+        this.cfg = await readConfig();
+        this.sz = scaler(this.cfg);
         await this.load();
         cx.notify();
       }
       // No watcher: poll gently.
       cx.timer.every(3000, (cx) => { cx.spawn(async (cx) => { await this.load(); cx.notify(); }); });
-    });
+    } catch (e) { notify({ title: "Review inbox", body: `Could not load: ${e?.message ?? e}`, level: "error" }); } });
     cx.timer.every(60000, (cx) => cx.notify());
   }
 
@@ -153,7 +161,7 @@ export class Inbox {
     const list = this.visible;
     const needs = list.filter((r) => r.needsYou);
     const done = list.filter((r) => !r.needsYou);
-    const root = v_flex().id("inbox").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
+    const root = withFont(v_flex(), this.cfg).id("inbox").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
       .on_mouse_down("left", () => this.h.focus());
     const section = (label, n, color) => h_flex().px(16).pt(14).pb(6).gap(8).items_center()
@@ -199,6 +207,7 @@ export class Inbox {
             .child(dot(color, waiting > 0, 7))
             .child(waiting ? `${plural(waiting, "agent")} waiting on you` : "No agent is waiting")))
         .child(h_flex().flex_none().gap(4).items_center().on_mouse_down("left", stopPress)
+          .child(btn("inbox-settings", t, { ic: "settings", tooltip: "Review settings", onClick: () => openOverlay(SETTINGS_WINDOW) }))
           .when(!!this.overlay, (el) => el.child(btn("inbox-close", t, { ic: "x", tooltip: "Close (esc)", onClick: () => this.closeWindow() })))))
       .child(h_flex().relative().px(12).pb(10).gap(8).items_center()
         .child(h_flex().p(3).gap(2).rounded(8).bg(t.surface).border_1().border_color(t.border).on_mouse_down("left", stopPress)
@@ -234,13 +243,13 @@ export class Inbox {
       .child(div().w(30).h(30).rounded(8).flex_none().bg(t.raised).border_1().border_color(t.border).flex().items_center().justify_center().child(ic))
       .child(v_flex().flex_1().min_w(0).gap(3)
         .child(h_flex().gap(7).items_center().min_w(0)
-          .child(div().min_w(0).truncate().text_size(13.5).font_semibold().child(req.title ?? "Review"))
-          .child(div().flex_none().h(16).px(5).rounded(4).flex().items_center().text_size(9.5).font_semibold().bg(t.raised).text_color(t.muted).child(kind))
-          .when(r.versions > 1 || (req.version ?? 1) > 1, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim)
+          .child(div().min_w(0).truncate().text_size(this.sz(13.5)).font_semibold().child(req.title ?? "Review"))
+          .child(div().flex_none().h(16).px(5).rounded(4).flex().items_center().text_size(this.sz(9.5)).font_semibold().bg(t.raised).text_color(t.muted).child(kind))
+          .when(r.versions > 1 || (req.version ?? 1) > 1, (el) => el.child(div().flex_none().text_size(this.sz(10.5)).text_color(t.dim)
             .child(`v${req.version ?? r.versions}${r.versions > 1 ? ` · ${plural(r.versions, "version")}` : ""}`)))
-          .when(fresh, (el) => el.child(div().flex_none().h(16).px(5).rounded(4).flex().items_center().text_size(9.5).font_semibold()
+          .when(fresh, (el) => el.child(div().flex_none().h(16).px(5).rounded(4).flex().items_center().text_size(this.sz(9.5)).font_semibold()
             .bg(tint(t.accent, "26")).text_color(t.accent).child("NEW"))))
-        .child(h_flex().gap(6).items_center().text_size(11.5).text_color(t.dim).min_w(0)
+        .child(h_flex().gap(6).items_center().text_size(this.sz(11.5)).text_color(t.dim).min_w(0)
           .child(dot(c, !!st.pulse, 6))
           .child(div().flex_none().text_color(r.needsYou ? c : t.dim).child(st.label))
           .children(meta.flatMap((m) => [sub("·"), div().min_w(0).truncate().child(m)]))

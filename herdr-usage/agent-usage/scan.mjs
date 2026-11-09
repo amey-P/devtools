@@ -1,0 +1,318 @@
+#!/usr/bin/env node
+// agent-usage scanner: reads coding agents' local session logs (and, with
+// --limits, plan-limit usage) and prints one JSON object on stdout.
+//
+//   node scan.mjs            tokens and cost for today and the last 7 days
+//   node scan.mjs --limits   also plan limits (Claude: api.anthropic.com; Codex: its logs)
+//
+// Logs are read incrementally: a cache in ~/.cache/herdr-agent-usage remembers how
+// far into each (append-only) session file we got, so later runs only read new
+// lines. The Claude OAuth token is read, never refreshed, never printed.
+// Always exits 0 with valid JSON; failures are reported per provider as `error`.
+
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
+
+const HOME = os.homedir();
+const DAYS = 7;
+const KEEP_MS = (DAYS + 1) * 86400_000;
+const CACHE_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, ".cache"), "herdr-agent-usage");
+const CACHE_FILE = path.join(CACHE_DIR, "scan.json");
+const CACHE_VERSION = 1;
+
+// $ per million tokens: [input, output, cache write 5m, cache write 1h, cache read].
+// First matching prefix wins. Estimates only (API list prices).
+const PRICES = [
+  ["claude-fable", [10, 50, 12.5, 20, 0.25]],
+  ["claude-mythos", [10, 50, 12.5, 20, 0.25]],
+  ["claude-opus-5-5", [4, 20, 5, 8, 0.2]],
+  ["claude-opus-4-5", [5, 25, 6.25, 10, 0.5]],
+  ["claude-opus-4-1", [15, 75, 18.75, 30, 1.5]],
+  ["claude-opus-4-0", [15, 75, 18.75, 30, 1.5]],
+  ["claude-opus-4-2", [15, 75, 18.75, 30, 1.5]],
+  ["claude-opus", [5, 25, 6.25, 10, 0.5]],
+  ["claude-sonnet-4-6", [3, 15, 3.75, 6, 0.3]],
+  ["claude-sonnet-4", [3, 15, 3.75, 6, 0.3]],
+  ["claude-sonnet", [2, 10, 2.5, 4, 0.2]],
+  ["claude-haiku-5", [0.1, 0.5, 0.125, 0.2, 0.01]],
+  ["claude-haiku", [1, 5, 1.25, 2, 0.1]],
+];
+const priceFor = (model) => (PRICES.find(([p]) => (model || "").startsWith(p)) || [null, null])[1];
+
+const dayOf = (ts) => {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+// ---------------------------------------------------------------- providers
+// Each parser turns one JSON line into a record or null:
+//   [day, model, in, out, cacheWrite5m, cacheWrite1h, cacheRead, cost|null, dedupeKey|null]
+// Codex lines can also carry rate limits (returned via `limits`).
+
+const providers = {
+  claude: {
+    dirs: [path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME, ".claude"), "projects")],
+    parse(o) {
+      const u = o?.message?.usage;
+      if (o?.type !== "assistant" || !u) return null;
+      const day = dayOf(o.timestamp);
+      if (!day) return null;
+      const cw = u.cache_creation_input_tokens || 0;
+      const cw1h = u.cache_creation?.ephemeral_1h_input_tokens || 0;
+      const key = o.message.id ? `${o.message.id}:${o.requestId || ""}` : null;
+      return [day, o.message.model || "", u.input_tokens || 0, u.output_tokens || 0,
+        Math.max(0, cw - cw1h), cw1h, u.cache_read_input_tokens || 0, null, key];
+    },
+  },
+  pi: {
+    dirs: [path.join(HOME, ".pi", "agent", "sessions")],
+    parse(o) {
+      const u = o?.message?.usage;
+      if (o?.type !== "message" || o.message.role !== "assistant" || !u) return null;
+      const day = dayOf(o.timestamp);
+      if (!day) return null;
+      const model = [o.message.provider, o.message.model].filter(Boolean).join("/");
+      return [day, model, u.input || 0, u.output || 0, u.cacheWrite || 0, 0, u.cacheRead || 0,
+        typeof u.cost?.total === "number" ? u.cost.total : null, o.id ? `pi:${o.id}` : null];
+    },
+  },
+  codex: {
+    dirs: [path.join(process.env.CODEX_HOME || path.join(HOME, ".codex"), "sessions")],
+    // Codex reports running totals per session; we record the per-turn delta.
+    parse(o, st) {
+      const p = o?.payload;
+      if (o?.type === "turn_context" && p?.model) { st.model = p.model; return null; }
+      if (o?.type !== "event_msg" || p?.type !== "token_count") return null;
+      if (p.rate_limits) st.limits = { at: o.timestamp, ...p.rate_limits };
+      const last = p.info?.last_token_usage;
+      const day = dayOf(o.timestamp);
+      if (!last || !day) return null;
+      const cached = last.cached_input_tokens || 0;
+      return [day, st.model || "codex", Math.max(0, (last.input_tokens || 0) - cached),
+        (last.output_tokens || 0), 0, 0, cached, null, null];
+    },
+  },
+};
+
+// ---------------------------------------------------------------- files
+
+function walk(dir, cutoff, out) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walk(p, cutoff, out);
+    else if (e.isFile() && e.name.endsWith(".jsonl")) {
+      try { const s = fs.statSync(p); if (s.mtimeMs >= cutoff) out.push([p, s]); } catch {}
+    }
+  }
+  return out;
+}
+
+function readFrom(file, offset, size) {
+  const len = size - offset;
+  if (len <= 0) return "";
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(len);
+    let got = 0;
+    while (got < len) {
+      const n = fs.readSync(fd, buf, got, len - got, offset + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    return buf.subarray(0, got).toString("utf8");
+  } finally { fs.closeSync(fd); }
+}
+
+function loadCache() {
+  try {
+    const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+    if (c.v === CACHE_VERSION) return c;
+  } catch {}
+  return { v: CACHE_VERSION, files: {} };
+}
+
+function saveCache(c) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    const tmp = `${CACHE_FILE}.${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(c));
+    fs.renameSync(tmp, CACHE_FILE);
+  } catch {}
+}
+
+// Scans one provider; updates cache.files in place. Returns codex limits if seen.
+function scanProvider(name, prov, cache, now) {
+  const cutoff = now - KEEP_MS;
+  const keepDay = dayOf(cutoff);
+  const seen = new Set();
+  let limits = null, newestLimitsAt = 0;
+  for (const dir of prov.dirs) {
+    for (const [file, st] of walk(dir, cutoff, [])) {
+      seen.add(file);
+      let ent = cache.files[file];
+      if (!ent || ent.p !== name || st.size < ent.off || st.ino !== ent.ino) {
+        ent = cache.files[file] = { p: name, ino: st.ino, off: 0, recs: [], st: {} };
+      }
+      if (st.size > ent.off) {
+        const text = readFrom(file, ent.off, st.size);
+        const end = text.lastIndexOf("\n");
+        if (end >= 0) {
+          for (const line of text.slice(0, end).split("\n")) {
+            if (!line) continue;
+            let o; try { o = JSON.parse(line); } catch { continue; }
+            const r = prov.parse(o, ent.st);
+            if (r && r[0] >= keepDay && r[1] !== "<synthetic>") ent.recs.push(r);
+          }
+          ent.off += Buffer.byteLength(text.slice(0, end + 1), "utf8");
+        }
+      }
+      ent.recs = ent.recs.filter((r) => r[0] >= keepDay);
+      const la = ent.st.limits ? Date.parse(ent.st.limits.at) || 0 : 0;
+      if (la > newestLimitsAt) { newestLimitsAt = la; limits = ent.st.limits; }
+    }
+  }
+  // Forget files that aged out or vanished.
+  for (const [f, ent] of Object.entries(cache.files)) if (ent.p === name && !seen.has(f)) delete cache.files[f];
+  return limits;
+}
+
+function rollup(name, cache, now) {
+  const days = [];
+  for (let i = DAYS - 1; i >= 0; i--) days.push(dayOf(now - i * 86400_000));
+  const byDay = Object.fromEntries(days.map((d) => [d, { in: 0, out: 0, cw: 0, cr: 0, cost: 0, msgs: 0 }]));
+  const models = {};
+  const latest = new Map(); // dedupe: last record per key wins (streamed lines repeat usage)
+  const plain = [];
+  for (const ent of Object.values(cache.files)) {
+    if (ent.p !== name) continue;
+    for (const r of ent.recs) { if (r[8]) latest.set(r[8], r); else plain.push(r); }
+  }
+  let priced = true;
+  for (const r of [...latest.values(), ...plain]) {
+    const b = byDay[r[0]];
+    if (!b) continue;
+    const [, model, i, o, w5, w1, cr, cost] = r;
+    let c = cost;
+    if (c == null) {
+      const pr = priceFor(model);
+      if (pr) c = (i * pr[0] + o * pr[1] + w5 * pr[2] + w1 * pr[3] + cr * pr[4]) / 1e6;
+      else { c = 0; if (i + o > 0) priced = false; }
+    }
+    b.in += i; b.out += o; b.cw += w5 + w1; b.cr += cr; b.cost += c; b.msgs += 1;
+    const m = (models[model] ??= { tokens: 0, cost: 0 });
+    m.tokens += i + o + w5 + w1 + cr; m.cost += c;
+  }
+  const total = (list) => list.reduce((a, d) => {
+    const b = byDay[d];
+    for (const k of Object.keys(a)) a[k] += b[k];
+    return a;
+  }, { in: 0, out: 0, cw: 0, cr: 0, cost: 0, msgs: 0 });
+  const top = Object.entries(models).sort((a, b) => b[1].tokens - a[1].tokens).slice(0, 4)
+    .map(([model, v]) => ({ model, ...v }));
+  return {
+    today: total([days[days.length - 1]]),
+    week: total(days),
+    daily: days.map((d) => { const b = byDay[d]; return { day: d, tokens: b.in + b.out + b.cw + b.cr, cost: b.cost }; }),
+    models: top,
+    estimated: name === "claude" || !priced,
+  };
+}
+
+// ---------------------------------------------------------------- limits
+
+function claudeCredentials() {
+  const base = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, ".claude");
+  const tryParse = (t) => { try { return JSON.parse(t)?.claudeAiOauth ?? null; } catch { return null; } };
+  // Claude Code keeps its live token in the macOS Keychain; the file can be a
+  // stale leftover. Use whichever copy expires last.
+  const found = [];
+  try { found.push(tryParse(fs.readFileSync(path.join(base, ".credentials.json"), "utf8"))); } catch {}
+  if (process.platform === "darwin") {
+    try {
+      found.push(tryParse(execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+        { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] })));
+    } catch {}
+  }
+  return found.filter((c) => c?.accessToken).sort((a, b) => (b.expiresAt || 0) - (a.expiresAt || 0))[0] ?? null;
+}
+
+async function claudeLimits() {
+  const c = claudeCredentials();
+  if (!c?.accessToken) return { state: "signed-out" };
+  const plan = c.subscriptionType || null;
+  if (c.expiresAt && c.expiresAt < Date.now()) return { state: "stale", plan };
+  try {
+    const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+      headers: {
+        Authorization: `Bearer ${c.accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "herdr-agent-usage",
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 401) return { state: "stale", plan };
+    if (!res.ok) return { state: "error", plan, error: `HTTP ${res.status}` };
+    const j = await res.json();
+    const win = (w, label, minutes) => (w && typeof w.utilization === "number")
+      ? { label, pct: w.utilization, resets_at: w.resets_at || null, minutes } : null;
+    const windows = [
+      win(j.five_hour, "5h", 300),
+      win(j.seven_day, "week", 10080),
+      win(j.seven_day_opus, "week · opus", 10080),
+      win(j.seven_day_sonnet, "week · sonnet", 10080),
+    ].filter(Boolean);
+    return { state: "ok", plan, windows };
+  } catch (e) {
+    return { state: "error", plan, error: String(e?.message || e) };
+  }
+}
+
+function codexLimits(rl) {
+  if (!rl) return null;
+  const win = (w, fallback) => {
+    if (!w || typeof w.used_percent !== "number") return null;
+    const m = w.window_minutes || 0;
+    const label = m >= 10000 ? "week" : m >= 60 ? `${Math.round(m / 60)}h` : fallback;
+    let resets = null;
+    if (typeof w.resets_at === "number") resets = new Date(w.resets_at * 1000).toISOString();
+    else if (typeof w.resets_in_seconds === "number") resets = new Date(Date.parse(rl.at) + w.resets_in_seconds * 1000).toISOString();
+    return { label, pct: w.used_percent, resets_at: resets, minutes: m };
+  };
+  const windows = [win(rl.primary, "primary"), win(rl.secondary, "secondary")].filter(Boolean);
+  return windows.length ? { state: "ok", plan: rl.plan_type || null, windows, as_of: rl.at } : null;
+}
+
+// ---------------------------------------------------------------- main
+
+async function main() {
+  const wantLimits = process.argv.includes("--limits");
+  const now = Date.now();
+  const cache = loadCache();
+  const out = { at: new Date(now).toISOString(), providers: {} };
+  const codexRL = {};
+  for (const [name, prov] of Object.entries(providers)) {
+    if (!prov.dirs.some((d) => fs.existsSync(d))) continue;
+    try {
+      const rl = scanProvider(name, prov, cache, now);
+      if (name === "codex") codexRL.v = rl;
+      out.providers[name] = rollup(name, cache, now);
+    } catch (e) {
+      out.providers[name] = { error: String(e?.message || e) };
+    }
+  }
+  saveCache(cache);
+  if (wantLimits) {
+    if (out.providers.claude) out.providers.claude.limits = await claudeLimits();
+    if (out.providers.codex) out.providers.codex.limits = codexLimits(codexRL.v);
+  }
+  process.stdout.write(JSON.stringify(out));
+}
+
+main().catch((e) => {
+  process.stdout.write(JSON.stringify({ at: new Date().toISOString(), error: String(e?.message || e), providers: {} }));
+});

@@ -3,6 +3,7 @@
 //
 //   herdr   mod/                  → $HERDR_APP_HOME/mods/review   (copy, or --link for a symlink)
 //           mod-inbox/            → $HERDR_APP_HOME/mods/review-inbox   (the inbox toggle, ctrl-shift-i)
+//           mod-settings/         → $HERDR_APP_HOME/mods/review-settings   (opens the settings window)
 //   claude  .claude-plugin/ + integrations/claude  → Claude Code marketplace "herdr-local"
 //   pi      integrations/pi       → pi package (loaded live from this repo)
 //
@@ -12,7 +13,8 @@
 //   uninstall          remove from a target (the review spool in data/review is kept)
 //   version <x.y.z>    set the version in every manifest
 //   bump patch|minor|major
-//   config [key [value|--reset]]   show or set where reviews open (place float|right|down|tab, width, height, focus, arrive open|inbox)
+//   config [key [value|--reset]]   show or set a review setting (window.place, ui.font, prompts.deny, …; see README)
+//   config path | edit             print the settings file, or open it in $EDITOR
 //
 // Every integration loads the bridge from $HERDR_APP_HOME/mods/review/bin/bridge.mjs,
 // so the herdr target must be installed for claude and pi to work.
@@ -25,7 +27,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_FILE, DEFAULTS, loadConfig, readConfigFile, setConfig } from "./mod/bin/config.mjs";
+import { CONFIG_FILE, describeConfig, ensureConfigFile, loadConfig, resolvePath, setConfig } from "./mod/bin/config.mjs";
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
@@ -35,6 +37,7 @@ const MOD_DEST = join(APP_HOME, "mods", MOD_NAME);
 const MODS = [
   { name: MOD_NAME, src: join(REPO, "mod"), dest: MOD_DEST },
   { name: "review-inbox", src: join(REPO, "mod-inbox"), dest: join(APP_HOME, "mods", "review-inbox") },
+  { name: "review-settings", src: join(REPO, "mod-settings"), dest: join(APP_HOME, "mods", "review-settings") },
 ];
 const MARKETPLACE = "herdr-local";
 const PLUGIN = "herdr-review";
@@ -196,13 +199,19 @@ function migrateKeys() {
 }
 
 function showConfig() {
-  const file = readConfigFile();
-  const eff = loadConfig();
-  log(`${c.dim(CONFIG_FILE)}`);
-  for (const k of Object.keys(DEFAULTS)) {
-    const from = k === "place" && process.env.HERDR_REVIEW_PLACE && eff.place !== (file.place ?? DEFAULTS.place) ? "$HERDR_REVIEW_PLACE"
-      : k in file ? "config" : "default";
-    log(`  ${k.padEnd(7)} ${String(eff[k]).padEnd(8)} ${c.dim(from)}`);
+  log(`${c.dim(CONFIG_FILE)}  ${c.dim("(or ⚙ Settings in a review)")}`);
+  const rows = describeConfig();
+  const sub = (p) => p.slice(p.indexOf(".") + 1);
+  const w = Math.max(...rows.map((r) => sub(r.path).length));
+  let group = null;
+  for (const { path, value, from } of rows) {
+    const g = path.split(".")[0];
+    if (g !== group) { group = g; log(`${g}`); }
+    const shown = typeof value === "string" || Array.isArray(value)
+      ? JSON.stringify(Array.isArray(value) ? value.join("\n") : value)
+      : String(value);
+    const v = shown.length > 52 ? `${shown.slice(0, 51)}…` : shown;
+    log(`  ${sub(path).padEnd(w)}  ${(from === "default" ? c.dim : c.ok)(v.padEnd(53))} ${c.dim(from)}`);
   }
 }
 
@@ -388,11 +397,27 @@ switch (cmd) {
     break;
   case "config": {
     const rest = argv.slice(1).filter((a) => a !== "--reset");
-    const [key, value] = rest;
+    const [key, ...vals] = rest;
+    if (key === "path") { log(CONFIG_FILE); break; }
+    if (key === "edit") {
+      const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "vi");
+      const file = ensureConfigFile();
+      const r = spawnSync(editor, [file], { stdio: "inherit", shell: process.platform === "win32" });
+      if (r.error) die(`couldn't run ${editor}: ${r.error.message}`);
+      break;
+    }
+    // A value may have spaces (prompts): the rest of the line. "\n" in it is a new line.
+    const value = vals.length ? vals.join(" ").replace(/\\n/g, "\n") : undefined;
     try {
       if (key && flags.has("--reset")) setConfig(key, null);
       else if (key && value !== undefined) setConfig(key, value);
-      else if (key) { log(String(loadConfig()[key] ?? die(`unknown setting "${key}"`))); break; }
+      else if (key) {
+        const path = resolvePath(key);
+        const v = path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), loadConfig());
+        if (v === undefined) die(`unknown setting "${key}"`);
+        log(typeof v === "object" ? JSON.stringify(v, null, 2) : Array.isArray(v) ? v.join("\n") : String(v));
+        break;
+      }
     } catch (e) { die(e.message); }
     showConfig();
     break;
