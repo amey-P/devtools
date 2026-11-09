@@ -20,17 +20,35 @@
   "children": [
     {
       "id": "sidebar",
-      "type": "block",
+      "type": "column",
       "size": {
         "px": 248
       },
+      "min": 44,
+      "max": 420,
       "background": "chrome",
       "window_drag": true,
-      "content": {
-        "mod": "space-tree"
-      },
-      "min": 44,
-      "max": 420
+      "resizable": false,
+      "children": [
+        {
+          "id": "spaces-tree",
+          "type": "block",
+          "window_drag": true,
+          "content": {
+            "mod": "space-tree"
+          }
+        },
+        {
+          "id": "usage",
+          "type": "block",
+          "size": {
+            "px": 64
+          },
+          "content": {
+            "mod": "agent-usage"
+          }
+        }
+      ]
     },
     {
       "id": "work",
