@@ -6,7 +6,7 @@
 #     status     what's installed, and whether it matches the repo
 #     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 #     uninstall  remove what this repo installed (layouts are left alone)
-#   targets: all (default) | git | minimal | sidebar | review
+#   targets: all (default) | git | minimal | sidebar | usage | review
 #
 # Without a clone, bootstrap with:
 #   curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash                    # clone + install all
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 DEFAULT_REPO_URL="https://github.com/amey-P/devtools.git"
-TARGETS="git minimal sidebar review"
+TARGETS="git minimal sidebar usage review"
 
 usage() { sed -n '2,20p' "$1" | sed 's/^# \{0,1\}//'; }
 
@@ -52,6 +52,10 @@ install_target() {
     git)     say "git:";     bash "$REPO_ROOT/herdr-git/sync.sh" ;;
     minimal) say "minimal:"; bash "$REPO_ROOT/herdr-minimal/sync.sh" ;;
     sidebar) say "sidebar:"; bash "$REPO_ROOT/herdr-sidebar/sync.sh" ;;
+    usage)
+      say "usage:"
+      has node || warn "  node not found; the usage widget needs Node.js 18+ to read usage (installing anyway)"
+      bash "$REPO_ROOT/herdr-usage/sync.sh" ;;
     review)
       say "review:"
       if has node; then review_mjs install all
@@ -84,6 +88,7 @@ status_target() {
   case "$1" in
     git)     show mods/git "$(mod_state "$REPO_ROOT/herdr-git" git --exclude sync.sh)" || r=1 ;;
     sidebar) show mods/space-tree "$(mod_state "$REPO_ROOT/herdr-sidebar/space-tree" space-tree)" || r=1 ;;
+    usage)   show mods/agent-usage "$(mod_state "$REPO_ROOT/herdr-usage/agent-usage" agent-usage)" || r=1 ;;
     minimal)
       show mods/space-icons "$(mod_state "$REPO_ROOT/herdr-minimal/space-icons" space-icons)" || r=1
       for f in minimal.json minimal.svg; do
@@ -99,7 +104,7 @@ status_target() {
 uninstall_target() {
   local name
   case "$1" in
-    git) name=git ;; minimal) name=space-icons ;; sidebar) name=space-tree ;;
+    git) name=git ;; minimal) name=space-icons ;; sidebar) name=space-tree ;; usage) name=agent-usage ;;
     review) say "review:"; if has node; then review_mjs uninstall all; else warn "  node not found; skipped"; fi; return ;;
   esac
   rm -rf "${HERDR_HOME:?}/mods/$name"
@@ -111,7 +116,7 @@ watch_all() {
   trap 'kill $pids 2>/dev/null; wait 2>/dev/null; exit 0' INT TERM
   for t in $1; do
     case "$t" in
-      git|minimal|sidebar) bash "$REPO_ROOT/herdr-$t/sync.sh" --watch & pids="$pids $!" ;;
+      git|minimal|sidebar|usage) bash "$REPO_ROOT/herdr-$t/sync.sh" --watch & pids="$pids $!" ;;
       review)
         has node || { warn "node not found; not watching review"; continue; }
         ( review_sync() { review_mjs sync herdr; }
