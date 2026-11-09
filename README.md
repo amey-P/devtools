@@ -14,7 +14,7 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 ## Install
 
 ```sh
-git clone <repo-url> herdr-app && cd herdr-app
+git clone https://github.com/amey-P/devtools.git herdr-app && cd herdr-app
 ./install.sh                 # install everything
 ./install.sh install git     # or one target: git | minimal | sidebar | review
 ./install.sh status          # ● current  ◐ differs/symlink  ○ missing; exit 0 when all current
@@ -24,18 +24,18 @@ git clone <repo-url> herdr-app && cd herdr-app
 You can also skip the clone:
 
 ```sh
-curl -fsSL <raw-url>/install.sh | HERDR_DEVTOOLS_REPO=<repo-url> bash
-curl -fsSL <raw-url>/install.sh | bash -s -- install review   # pass a command/target
+curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash -s -- install review   # pass a command/target
 ```
 
-The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a clone already exists, and then runs that copy's `install.sh`. Once the repo has a remote, set `DEFAULT_REPO_URL` in `install.sh` and you can drop `HERDR_DEVTOOLS_REPO`.
+The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a clone already exists, and then runs that copy's `install.sh`.
 
 **Requirements:** `bash`, `rsync`, `git` (for the bootstrap). The `review` target also needs Node.js 18+. When a tool is missing, the script prints the install command for your OS (brew, apt, dnf, pacman, apk or zypper). The `review` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
 
 | Variable | Default | |
 |---|---|---|
 | `HERDR_APP_HOME` | `~/.config/herdr-app` | Herdr's home |
-| `HERDR_DEVTOOLS_REPO` | `DEFAULT_REPO_URL` in `install.sh` | Git URL the bootstrap clones from |
+| `HERDR_DEVTOOLS_REPO` | `https://github.com/amey-P/devtools.git` | Git URL the bootstrap clones from |
 | `HERDR_DEVTOOLS_DIR` | `~/.local/share/herdr-devtools` | Where the bootstrap clones to |
 
 ## Develop

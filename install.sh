@@ -9,8 +9,8 @@
 #   targets: all (default) | git | minimal | sidebar | review
 #
 # Without a clone, bootstrap with:
-#   curl -fsSL <raw-url>/install.sh | bash                    # clone + install all
-#   curl -fsSL <raw-url>/install.sh | bash -s -- install git  # clone + one target
+#   curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash                    # clone + install all
+#   curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash -s -- install git  # clone + one target
 #
 # Environment:
 #   HERDR_APP_HOME        Herdr's home            (default ~/.config/herdr-app)
@@ -20,7 +20,7 @@
 # Everything sits inside main(), so a truncated `curl | bash` download runs nothing.
 set -euo pipefail
 
-DEFAULT_REPO_URL=""   # set to the remote's URL once there is one
+DEFAULT_REPO_URL="https://github.com/amey-P/devtools.git"
 TARGETS="git minimal sidebar review"
 
 usage() { sed -n '2,20p' "$1" | sed 's/^# \{0,1\}//'; }
