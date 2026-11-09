@@ -1,0 +1,16 @@
+{
+  "name": "herdr-review",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "description": "Review documents and agent plans natively in the Herdr app: the herdr-app mod, a Claude Code plugin and a pi extension, installed from one repo.",
+  "bin": {
+    "herdr-review": "./install.mjs"
+  },
+  "scripts": {
+    "install-all": "node install.mjs install all",
+    "sync": "node install.mjs sync",
+    "status": "node install.mjs status"
+  },
+  "author": "Amey Patil"
+}

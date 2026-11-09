@@ -1,0 +1,97 @@
+// Splits a markdown plan into annotatable blocks.
+//   splitBlocks(text) -> [{ kind, src, line, level }]
+// Kinds: heading, item (one list item, any depth, with its continuation lines), code, table,
+//        quote, rule, para. `level`: list nesting depth (0 for everything else).
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const HEADING = /^ {0,3}#{1,6}(\s|$)/;
+const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+/;
+const RULE = /^ {0,3}([-*_])(\s*\1){2,}\s*$/;
+const TABLE = /^\s*\|/;
+const QUOTE = /^ {0,3}>/;
+
+export function splitBlocks(text) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  // Front matter is not part of the plan's prose.
+  if (lines[0] === "---") {
+    const end = lines.indexOf("---", 1);
+    if (end > 0) i = end + 1;
+  }
+  const push = (kind, from, to, level = 0) => {
+    const src = lines.slice(from, to).join("\n").replace(/\s+$/, "");
+    if (src.trim()) out.push({ kind, src, line: from, level });
+  };
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    const fence = FENCE.exec(l);
+    if (fence) {
+      const mark = fence[1];
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trimStart().startsWith(mark)) j++;
+      push("code", i, Math.min(j + 1, lines.length));
+      i = j + 1;
+      continue;
+    }
+    if (HEADING.test(l)) { push("heading", i, i + 1); i++; continue; }
+    if (RULE.test(l)) { push("rule", i, i + 1); i++; continue; }
+    if (TABLE.test(l)) {
+      let j = i + 1;
+      while (j < lines.length && TABLE.test(lines[j])) j++;
+      push("table", i, j); i = j; continue;
+    }
+    if (QUOTE.test(l)) {
+      let j = i + 1;
+      while (j < lines.length && QUOTE.test(lines[j])) j++;
+      push("quote", i, j); i = j; continue;
+    }
+    const item = ITEM.exec(l);
+    if (item) {
+      const indent = item[1].replace(/\t/g, "    ").length;
+      let j = i + 1;
+      // Continuation: lines indented past the marker (fences inside too), or lazy paragraph lines.
+      while (j < lines.length) {
+        const n = lines[j];
+        if (!n.trim()) {
+          let k = j + 1;
+          while (k < lines.length && !lines[k].trim()) k++;
+          if (k < lines.length && leading(lines[k]) > indent && !ITEM.test(lines[k])) { j = k; continue; }
+          break;
+        }
+        if (ITEM.test(n)) break;
+        if (leading(n) > indent) {
+          const f = FENCE.exec(n.trimStart());
+          if (f) { j++; while (j < lines.length && !lines[j].trimStart().startsWith(f[1])) j++; }
+          j++;
+          continue;
+        }
+        if (HEADING.test(n) || FENCE.test(n) || TABLE.test(n) || QUOTE.test(n) || RULE.test(n)) break;
+        j++;
+      }
+      const level = Math.floor(indent / 2);
+      const src = lines.slice(i, j).map((x) => x.slice(Math.min(indent, leading(x)))).join("\n").replace(/\s+$/, "");
+      out.push({ kind: "item", src, line: i, level });
+      i = j;
+      continue;
+    }
+    let j = i + 1;
+    while (j < lines.length && lines[j].trim() && !FENCE.test(lines[j]) && !HEADING.test(lines[j]) &&
+      !ITEM.test(lines[j]) && !TABLE.test(lines[j]) && !QUOTE.test(lines[j]) && !RULE.test(lines[j])) j++;
+    push("para", i, j); i = j;
+  }
+  return out;
+}
+
+const leading = (s) => s.replace(/\t/g, "    ").length - s.replace(/\t/g, "    ").trimStart().length;
+
+/** Plain text of a block, for quotes and labels. */
+export function plain(src) {
+  return src
+    .replace(/^ {0,3}#{1,6}\s+/, "")
+    .replace(/^(\s*)([-*+]|\d{1,9}[.)])\s+(\[[ xX]\]\s+)?/, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .trim();
+}

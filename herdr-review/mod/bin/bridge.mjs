@@ -1,0 +1,272 @@
+// Review bridge: agents and scripts ask the herdr-app `review` mod to show something for review.
+//
+// Kinds: plan (an agent's plan, from the Claude hook / pi submit_plan), ask (an agent ran bin/review.mjs),
+//        file and reply (opened by the person from Herdr; they don't go through this bridge).
+// Modes: decision (the caller waits for approve / deny) or send (feedback is typed into `target` later).
+//
+// Spool: <herdr-app home>/data/review/<id>/
+//   request.json   {id, kind, mode, agent, terminal, target, cwd, title, content, file, session, version, created, space, tab,
+//                   parent: {app, space_name, tab_name, name}, place}
+//   meta.json      {pane, tab} or {overlay}   where the review opened (a split / tab, or a floating window)
+// Float queue: <spool>/.float/<id>  the bridge asks the mod to open <id> as a floating window (mod.open review);
+//              the mod's launcher opens it, writes meta.json {overlay} and removes the marker.
+//   meta.json      {inbox: true} instead, when config `arrive` is "inbox": a toast, and it waits in the inbox
+//   draft.json     the mod's unsent annotations
+//   seen.json      {opened_at, deferred_at}: when the person opened it / closed it to come back later (the mod writes it)
+//   decision.json  {decision: "approve" | "deny" | "dismissed", feedback, notes, at}   (the mod writes it)
+//   cancelled      the caller stopped waiting (interrupted, or a newer request replaced this one)
+// Replies: <herdr-app home>/data/review/replies/<terminal>.json  {agent, text, at}  (agent hooks write it)
+//
+// States (mod/ui.js readReview; the review inbox lists them): pending (decision mode, no decision.json, no cancelled),
+// draft / open (send mode, with / without unsent notes), approved, changes, sent, dismissed, replaced, interrupted.
+// Closing an undecided review (✕, Esc) is "later": nothing is written but seen.json, and the caller keeps waiting.
+// Only Dismiss (decision.json "dismissed") lets the caller fall back to its own prompt.
+//
+// openReview() resolves with the decision (decision mode), {decision: "opened", id} (send mode),
+// or null when this isn't a herdr-app terminal (callers fall back to their normal flow).
+import { execFile, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { loadConfig } from "./config.mjs";
+
+export const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
+export const SPOOL = join(APP_HOME, "data", "review");
+export const REPLIES = join(SPOOL, "replies");
+export const FLOAT_QUEUE = join(SPOOL, ".float");
+const MOD = "review";
+const POLL_MS = 400;
+
+function run(cmd, args, timeout = 15000) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout, maxBuffer: 16 << 20 }, (err, stdout, stderr) =>
+      resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), err }));
+  });
+}
+
+let appBin = null;
+async function herdrApp(args) {
+  const candidates = appBin ? [appBin] : ["herdr-app", join(homedir(), ".local", "bin", "herdr-app"), "/usr/local/bin/herdr-app"];
+  let last = null;
+  for (const bin of candidates) {
+    const r = await run(bin, args);
+    if (r.err?.code === "ENOENT") { last = r; continue; }
+    appBin = bin;
+    return r;
+  }
+  return last ?? { ok: false, stdout: "", stderr: "herdr-app not found", err: new Error("herdr-app not found") };
+}
+
+const doCmd = (name, args) => herdrApp(["do", name, JSON.stringify(args)]);
+const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The first `# heading` of a document, else its first line. */
+export function docTitle(text, fallback = "Plan") {
+  const h = /^ {0,3}#\s+(.+?)\s*#*\s*$/m.exec(text ?? "");
+  if (h) return h[1].replace(/^Plan:\s*/i, "");
+  return ((text ?? "").split("\n").find((l) => l.trim()) ?? fallback).trim().slice(0, 80) || fallback;
+}
+export const planTitle = (plan) => docTitle(plan, "Plan");
+
+function findTerminal(ls, terminal) {
+  for (const space of ls?.spaces ?? []) {
+    for (const tab of space.tabs ?? []) {
+      for (const t of tab.terminals ?? []) {
+        if (t.terminal === terminal) return { space, tab, entry: t };
+        for (const s of t.sub_agents ?? []) {
+          const addr = typeof s === "string" ? s : s.terminal;
+          if (addr === terminal) return { space, tab, entry: null };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+const isDone = (dir) => existsSync(join(dir, "decision.json")) || existsSync(join(dir, "cancelled"));
+
+/** Earlier reviews of this kind from this terminal. */
+function earlierFor(terminal, kind) {
+  if (!existsSync(SPOOL)) return [];
+  const out = [];
+  for (const id of readdirSync(SPOOL)) {
+    if (!id.startsWith("rv-") && !id.startsWith("pr-")) continue;
+    const dir = join(SPOOL, id);
+    const req = readJson(join(dir, "request.json"));
+    if (!req || req.terminal !== terminal || (req.kind ?? "plan") !== kind) continue;
+    out.push({ id, dir, req, done: isDone(dir) });
+  }
+  return out.sort((a, b) => a.req.created - b.req.created);
+}
+
+/** Drops finished reviews older than a week (send-mode reviews: untouched for a week; undecided ones: past the
+ *  Claude hook's 4-day wait plus a margin, when nothing can be waiting on them any more). */
+function gc() {
+  if (!existsSync(SPOOL)) return;
+  const old = Date.now() - 7 * 86400e3;
+  for (const id of readdirSync(SPOOL)) {
+    if (id === "replies" || id === ".float") continue;
+    const dir = join(SPOOL, id);
+    try {
+      const req = readJson(join(dir, "request.json"));
+      const done = isDone(dir) || req?.mode === "send" || id.startsWith(".send-") || id.startsWith("pane-");
+      if (done && statSync(dir).mtimeMs < old) rmSync(dir, { recursive: true, force: true });
+      else if (!done && /^(rv|pr)-/.test(id) && req?.created < Date.now() - 6 * 86400e3) rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+async function closePane(dir) {
+  const meta = readJson(join(dir, "meta.json"));
+  if (meta?.overlay) await doCmd("overlay.close", { id: meta.overlay });
+  else if (meta?.pane) await doCmd("pane.close", { pane: meta.pane });
+}
+
+/** Asks the mod's launcher to open review `id` as a floating window; true once it did. */
+async function openFloating(id, dir) {
+  mkdirSync(FLOAT_QUEUE, { recursive: true });
+  const marker = join(FLOAT_QUEUE, id);
+  writeFileSync(marker, String(Date.now()));
+  // mod.open toggles: a launcher still open from a racing call would close instead, so try twice.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await doCmd("mod.open", { name: MOD });
+    if (r.ok) {
+      for (let waited = 0; waited < 1500; waited += 100) {
+        const meta = readJson(join(dir, "meta.json"));
+        if (meta?.overlay || meta?.inbox) return true;
+        await sleep(100);
+      }
+    }
+  }
+  rmSync(marker, { force: true });
+  const meta = readJson(join(dir, "meta.json"));
+  return !!(meta?.overlay || meta?.inbox);
+}
+
+/** Opens review `id` where `place` says; falls back to a split, then a tab. False when nothing opened. */
+async function openPlaced(where, id, dir, kind, place, arrive) {
+  const props = { id };
+  // Quiet arrival goes through the mod's launcher too: it posts the toast instead of opening a window.
+  if ((place === "float" || arrive === "inbox") && await openFloating(id, dir)) return true;
+  if (place !== "tab" && where.entry?.pane) {
+    // Show and focus the caller's own pane first, so the split can't land beside
+    // whatever pane the person happens to be working in.
+    await doCmd("pane.focus", { pane: where.entry.pane });
+    const opened = await doCmd("pane.split", { pane: where.entry.pane, direction: place === "down" ? "down" : "right", mod: MOD, props });
+    if (opened.ok && await recordOpened(dir, opened)) return true;
+  }
+  const opened = await doCmd("tab.new", { space: where.space.id, mod: MOD, props, name: TAB_NAMES[kind] ?? "Review" });
+  return opened.ok && await recordOpened(dir, opened);
+}
+
+async function recordOpened(dir, opened) {
+  let made = {};
+  try { made = JSON.parse(opened.stdout); } catch {}
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({ pane: made.pane ?? null, tab: made.tab ?? null }));
+  if (made.pane) await doCmd("pane.focus", { pane: made.pane });
+  return true;
+}
+
+function cancel(dir, reason) {
+  try { writeFileSync(join(dir, "cancelled"), reason); } catch {}
+}
+
+const TAB_NAMES = { plan: "Plan review", ask: "Review", file: "Review", reply: "Review" };
+
+/**
+ * Opens a review for the calling terminal: a floating window, a split or a tab (config.mjs; `place` overrides). In decision mode, waits for the decision.
+ * `handleSignals`: a standalone process (the Claude hook, the CLI) cancels the review when killed.
+ * @param {{kind?: "plan"|"ask", mode?: "decision"|"send", agent?: string, content: string, title?: string,
+ *          file?: string, cwd?: string, session?: string, target?: string, place?: "float"|"right"|"down"|"tab",
+ *          signal?: AbortSignal, handleSignals?: boolean}} o
+ */
+export async function openReview({ kind = "plan", mode = "decision", agent = null, content, title, file = null, cwd, session,
+  target, place, signal, handleSignals = false }) {
+  const terminal = process.env.HC_TERMINAL_ID;
+  if (!terminal || !content?.trim()) return null;
+  const lsr = await herdrApp(["ls"]);
+  if (!lsr.ok) return null;
+  let ls;
+  try { ls = JSON.parse(lsr.stdout); } catch { return null; }
+  const where = findTerminal(ls, terminal);
+  if (!where) return null;
+
+  gc();
+  const cfg = loadConfig({ place });
+  // A resubmission replaces the open review of the same terminal and kind.
+  const earlier = earlierFor(terminal, kind);
+  for (const p of earlier.filter((p) => !p.done)) { cancel(p.dir, "replaced"); await closePane(p.dir); }
+  const version = earlier.filter((p) => (session ? p.req.session === session : true)).length + 1;
+
+  const id = `rv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const dir = join(SPOOL, id);
+  mkdirSync(dir, { recursive: true });
+  const request = {
+    id, kind, mode, agent, terminal, target: target ?? terminal, cwd: cwd ?? process.cwd(),
+    title: title || (file ? basename(file) : docTitle(content, kind === "plan" ? "Plan" : "Review")),
+    content, file, session: session ?? null, version, created: Date.now(), space: where.space.id, tab: where.tab.id,
+    // Who asked: shown in the review's header, and kept for when that agent is gone.
+    parent: { app: where.entry?.app ?? null, space_name: where.space.name ?? null, tab_name: where.tab.name ?? null,
+      name: where.entry?.name ?? null },
+    place: cfg.place,
+  };
+  writeFileSync(join(dir, "request.json"), JSON.stringify(request, null, 2));
+
+  if (!(await openPlaced(where, id, dir, kind, cfg.place, cfg.arrive))) { cancel(dir, "could not open"); return null; }
+
+  if (mode === "send") return { decision: "opened", id };
+
+  const stop = (reason) => cancel(dir, reason);
+  const onSignal = () => { stop("interrupted"); closePane(dir).finally(() => process.exit(130)); };
+  const sigs = handleSignals ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
+  for (const s of sigs) process.once(s, onSignal);
+  try {
+    for (;;) {
+      if (signal?.aborted) { stop("interrupted"); await closePane(dir); throw new Error("aborted"); }
+      if (existsSync(join(dir, "cancelled"))) return { decision: "dismissed" };
+      const d = readJson(join(dir, "decision.json"));
+      if (d?.decision) {
+        // Let the pane show what was sent for a moment, then close it.
+        setTimeout(() => closePane(dir), 900).unref?.();
+        await sleep(950);
+        return d;
+      }
+      await sleep(POLL_MS);
+    }
+  } finally {
+    for (const s of sigs) process.off(s, onSignal);
+  }
+}
+
+/** An agent's plan: waits for approve / deny. Kept for the Claude hook and the pi extension. */
+export function requestReview({ agent, plan, cwd, title, session, place, signal, handleSignals = false }) {
+  return openReview({ kind: "plan", mode: "decision", agent, content: plan, cwd, title, session, place, signal, handleSignals });
+}
+
+/** Records an agent's last reply so the review pane can open it (ctrl-shift-r). */
+export function recordReply(terminal, agent, text) {
+  if (!terminal || !text?.trim()) return;
+  mkdirSync(REPLIES, { recursive: true });
+  const file = join(REPLIES, `${terminal.replace(/[^\w.-]/g, "_")}.json`);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ agent, terminal, text, at: Date.now() }));
+  renameSync(tmp, file);
+}
+
+/** Types `text` into a terminal (queued by the agent if it's busy), after `delayMs`, detached. */
+export function sendLater(terminal, text, delayMs = 1500) {
+  const hc = existsSync(join(homedir(), ".local", "bin", "hc")) ? join(homedir(), ".local", "bin", "hc") : "hc";
+  const file = join(SPOOL, `.send-${Date.now().toString(36)}.txt`);
+  mkdirSync(SPOOL, { recursive: true });
+  writeFileSync(file, text);
+  const child = spawn("sh", ["-c", `sleep ${delayMs / 1000}; "$0" send "$1" "$(cat "$2")"; rm -f "$2"`, hc, terminal, file],
+    { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+/** What the agent is told when the plan is sent back. */
+export const DENY_PREFIX =
+  "YOUR PLAN WAS NOT APPROVED.\n\nYou MUST revise the plan to address ALL of the feedback below before submitting it again.\n" +
+  "Do not resubmit the same plan unchanged.\n\n";
+export const NOTES_PREFIX = "Plan approved, with these notes to follow while implementing:\n\n";
