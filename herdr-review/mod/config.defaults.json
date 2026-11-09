@@ -1,0 +1,62 @@
+{
+  "$comment": "herdr-review defaults. Don't edit: override any key in <herdr-app home>/data/review/config.json (the review's ⚙ Settings screen writes it). Text may be a string or an array of lines; {placeholders} are filled in.",
+  "window": {
+    "place": "float",
+    "width": 0.6,
+    "height": 0.8,
+    "focus": true,
+    "arrive": "open"
+  },
+  "ui": {
+    "font": "",
+    "textSize": 0,
+    "contentWidth": 860,
+    "sidebarWidth": 320,
+    "sidebar": "auto",
+    "readingTime": true
+  },
+  "prompts": {
+    "deny": [
+      "YOUR PLAN WAS NOT APPROVED.",
+      "",
+      "You MUST revise the plan to address ALL of the feedback below before submitting it again.",
+      "Do not resubmit the same plan unchanged.",
+      "",
+      ""
+    ],
+    "approvedWithNotes": [
+      "Plan approved, with these notes to follow while implementing:",
+      "",
+      ""
+    ],
+    "feedback": {
+      "intro": "I've reviewed {subject} and have {count} of feedback:",
+      "plan": { "heading": "Plan Feedback", "subject": "this plan" },
+      "reply": { "heading": "Feedback on your last reply", "subject": "your last reply" },
+      "file": { "heading": "Feedback on {name}", "subject": "`{path}`" },
+      "sections": {
+        "remove": "Remove this",
+        "change": "Change this",
+        "on": "Feedback on: \"{quote}\"",
+        "general": "General feedback",
+        "generalOnly": "Feedback"
+      }
+    },
+    "notes": {
+      "plan": { "heading": "Implementation notes", "intro": "Notes on the approved plan:" },
+      "other": { "heading": "Notes", "intro": "Approved, with these notes:" }
+    },
+    "pi": {
+      "planMode": [
+        "You are in PLAN MODE. Deeply understand the problem and produce a plan for review before changing anything.",
+        "- Explore the code thoroughly before proposing anything. Do not assume.",
+        "- Writes and edits are limited to markdown files inside the working directory: only write the plan.",
+        "- Write the plan to a markdown file (e.g. PLAN.md), then call {tool} with its path.",
+        "- The user reviews it in the Herdr app and approves it or sends feedback.",
+        "- Feedback is not failure: edit the same file to address ALL of it, then call {tool} again.",
+        "- Do not implement anything until {tool} reports approval."
+      ],
+      "planOff": "Plan mode is over. You may now edit files and run commands normally."
+    }
+  }
+}

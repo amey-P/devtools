@@ -3,12 +3,9 @@ import { div, svg, PathBuilder, Background } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { appHome, openOverlay } from "herdr";
+import * as core from "./config-core.js";
 export const ICONS = "mods/review/icons";
 export const AGENT_NAMES = { claude: "Claude Code", "claude-code": "Claude Code", pi: "pi", codex: "Codex" };
-// Same file and defaults as bin/config.mjs (a mod can't import that node module).
-export const CONFIG_DEFAULTS = { place: "float", width: 0.6, height: 0.8, focus: true, arrive: "open" };
-export const PLACES = ["float", "right", "down", "tab"];
-export const ARRIVALS = ["open", "inbox"];
 export const base = (f) => (f ?? "").split(/[\\/]/).pop();
 export const safe = (s) => String(s).replace(/[^\w.-]/g, "_");
 
@@ -26,15 +23,43 @@ export const ago = (ms) => {
   if (s < 86400) return `${Math.round(s / 3600)}h`;
   return `${Math.round(s / 86400)}d`;
 };
-export async function readConfig() {
-  const c = (await readJson(`${appHome()}/data/review/config.json`)) ?? {};
-  const cfg = { ...CONFIG_DEFAULTS };
-  if (PLACES.includes(c.place)) cfg.place = c.place;
-  for (const k of ["width", "height"]) if (typeof c[k] === "number" && c[k] > 0 && (c[k] <= 1 || c[k] >= 200)) cfg[k] = c[k];
-  if (typeof c.focus === "boolean") cfg.focus = c.focus;
-  if (ARRIVALS.includes(c.arrive)) cfg.arrive = c.arrive;
-  return cfg;
+// ---- settings (config-core.js has the rules; bin/config.mjs reads the same files for node) -----------------
+
+// Only if config.defaults.json can't be read: enough to open a window.
+const FALLBACK = { window: { place: "float", width: 0.6, height: 0.8, focus: true, arrive: "open" },
+  ui: { font: "", textSize: 0, contentWidth: 860, sidebarWidth: 320, sidebar: "auto", readingTime: true }, prompts: null };
+let defaults = null;
+export async function configDefaults() {
+  defaults ??= await readJson(`${appHome()}/mods/review/config.defaults.json`);
+  return defaults ?? FALLBACK;
 }
+export const configPath = () => `${appHome()}/data/review/config.json`;
+/** config.json as written (an empty object when missing). */
+export const readConfigFile = async () => (await readJson(configPath())) ?? {};
+/** The settings in effect: {window, ui, prompts} (prompts is null without the defaults file). */
+export async function readConfig() {
+  return core.merge(await configDefaults(), await readConfigFile());
+}
+/** Saves settings `cfg` (keeping only what differs from the defaults, and keys this version doesn't know). */
+export async function writeConfig(cfg) {
+  const d = await configDefaults();
+  let text = null;
+  try { text = await fs.readFile(configPath(), "utf8"); } catch {}
+  let raw = {};
+  if (text !== null && text.trim()) {
+    try { raw = JSON.parse(text); } catch { throw new Error("config.json isn't valid JSON: fix it or delete it, then save again"); }
+  }
+  const next = core.toFile(d, core.merge(d, cfg), raw);
+  await fs.mkdir(`${appHome()}/data/review`, { recursive: true }).catch(() => {});
+  await fs.writeFile(configPath(), JSON.stringify(next, null, 2) + "\n");
+  return next;
+}
+export const fillText = core.text;
+/** Text sizes scaled by the `ui.textSize` setting: sizes are designed for 13px text; 0 (the default) leaves them. */
+export const scaler = (cfg) => { const r = (cfg?.ui?.textSize || 13) / 13; return (n) => Math.round(n * r * 2) / 2; };
+/** Applies `ui.font` to an element (text styles inherit, so everything inside follows). */
+export const withFont = (el, cfg) => (cfg?.ui?.font ? el.font_family(cfg.ui.font) : el);
+
 // Stops a press from reaching a floating window's drag (and the root's focus grab).
 export const stopPress = (_e, cx) => cx.stop_propagation();
 
@@ -98,7 +123,7 @@ export const openInboxAction = { name: "mod.open", args: { name: "review-inbox" 
  *  so the bridge can close it after a decision. Returns the overlay id. */
 export async function openReviewWindow(id, req, cfg) {
   const overlay = openOverlay({ kind: "window", mod: "review", props: { id, float: true },
-    key: `review-${safe(req?.terminal ?? id)}`, width: cfg.width, height: cfg.height });
+    key: `review-${safe(req?.terminal ?? id)}`, width: cfg.window.width, height: cfg.window.height });
   await fs.writeFile(`${spool()}/${id}/meta.json`, JSON.stringify({ overlay, pane: null })).catch(() => {});
   return overlay;
 }

@@ -17,31 +17,39 @@ export function ordered(anns) {
   return [...anns].sort((a, b) => (a.block ?? 1e9) - (b.block ?? 1e9) || a.created - b.created);
 }
 
+/** The wording, as in config.defaults.json `prompts.feedback` (the review passes the person's settings). */
+export const LABELS = {
+  intro: "I've reviewed {subject} and have {count} of feedback:",
+  sections: { remove: "Remove this", change: "Change this", on: "Feedback on: \"{quote}\"", general: "General feedback", generalOnly: "Feedback" },
+};
+const fill = (v, vars) => (Array.isArray(v) ? v.join("\n") : String(v)).replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
+
 /**
  * `subject`: what was reviewed, for the intro ("this plan", "`docs/spec.md`", "your last reply").
- * `intro`: a string, or (count) => string, replacing the default intro.
+ * `intro`: a string, or (count) => string, replacing the intro. `labels`: {intro, sections}, see LABELS.
  */
-export function toMarkdown(anns, { heading = "Plan Feedback", intro, subject = "this plan" } = {}) {
+export function toMarkdown(anns, { heading = "Plan Feedback", intro, subject = "this plan", labels = LABELS } = {}) {
+  const sec = { ...LABELS.sections, ...labels?.sections };
   const list = ordered(anns).filter((a) => a.type !== "general" || a.text.trim());
   if (!list.length) return "";
   const specific = list.filter((a) => a.type !== "general");
   const general = list.filter((a) => a.type === "general");
   const out = [`# ${heading}`, ""];
   const pieces = `${list.length} piece${list.length === 1 ? "" : "s"}`;
-  out.push(typeof intro === "function" ? intro(list.length) : intro ?? `I've reviewed ${subject} and have ${pieces} of feedback:`, "");
+  out.push(typeof intro === "function" ? intro(list.length) : fill(intro ?? labels?.intro ?? LABELS.intro, { subject, count: pieces }), "");
   specific.forEach((a, n) => {
     const q = a.quote ?? "";
     if (a.type === "delete") {
-      out.push(`## ${n + 1}. Remove this`, "", fenced(q), "");
+      out.push(`## ${n + 1}. ${fill(sec.remove, {})}`, "", fenced(q), "");
       if (a.text.trim()) out.push(a.text.trim(), "");
     } else if (a.type === "replace") {
-      out.push(`## ${n + 1}. Change this`, "", "**From:**", fenced(q), "", "**To:**", fenced(a.text.trim()), "");
+      out.push(`## ${n + 1}. ${fill(sec.change, {})}`, "", "**From:**", fenced(q), "", "**To:**", fenced(a.text.trim()), "");
     } else {
-      out.push(`## ${n + 1}. Feedback on: "${clip(plain(q))}"`, "", quoted(q), "", a.text.trim(), "");
+      out.push(`## ${n + 1}. ${fill(sec.on, { quote: clip(plain(q)) })}`, "", quoted(q), "", a.text.trim(), "");
     }
   });
   if (general.length) {
-    out.push(specific.length ? "## General feedback" : "## Feedback", "");
+    out.push(`## ${fill(specific.length ? sec.general : sec.generalOnly, {})}`, "");
     for (const a of general) out.push(a.text.trim(), "");
   }
   out.push("---");

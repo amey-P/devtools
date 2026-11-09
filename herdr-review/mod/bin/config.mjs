@@ -1,86 +1,86 @@
-// Review settings: where the review opens and how big it is.
+// Review settings for node (the bridge, the agent hooks, the installer). The rules live in ../config-core.js and the
+// defaults in ../config.defaults.json; the mod reads the same files (ui.js readConfig).
 //
-// File: <herdr-app home>/data/review/config.json  (the mod reads the same file; see main.js readConfig)
-//   place   "float" (a floating window, default) | "right" | "down" (a split beside the agent) | "tab"
-//   width   floating window width: px, or a share of the Herdr window up to 1
-//   height  floating window height, the same way
-//   focus   the review takes the keyboard when it opens
-//   arrive  "open" (a new review opens where `place` says, default) | "inbox" (a toast; it waits in the review inbox)
-// Precedence: defaults < config.json < $HERDR_REVIEW_PLACE < a per-call `place`.
+// File: <herdr-app home>/data/review/config.json, nested like the defaults, holding only what differs from them:
+//   window   place "float" | "right" | "down" | "tab" · width / height (px, or a share of the window up to 1) · focus · arrive "open" | "inbox"
+//   ui       font · textSize · contentWidth · sidebarWidth · sidebar "auto" | "open" | "closed" · readingTime
+//   prompts  what the agent is told: deny, approvedWithNotes, feedback.*, notes.*, pi.*
+// Precedence for window.place: defaults < config.json < $HERDR_REVIEW_PLACE < a per-call `place`.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as core from "../config-core.js";
+
+export { PLACES, text } from "../config-core.js";
 
 const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
 export const CONFIG_FILE = join(APP_HOME, "data", "review", "config.json");
-export const PLACES = ["float", "right", "down", "tab"];
-export const ARRIVALS = ["open", "inbox"];
-export const DEFAULTS = Object.freeze({ place: "float", width: 0.6, height: 0.8, focus: true, arrive: "open" });
+const DEFAULTS_FILE = join(dirname(fileURLToPath(import.meta.url)), "..", "config.defaults.json");
+export const DEFAULTS = Object.freeze(JSON.parse(readFileSync(DEFAULTS_FILE, "utf8")));
 
-const size = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 && (n <= 1 || n >= 200) ? n : null;
-};
-const bool = (v) => (v === true || v === "true" || v === "1" || v === "yes" || v === "on" ? true
-  : v === false || v === "false" || v === "0" || v === "no" || v === "off" ? false : null);
-
-/** Parses one setting; returns the value, or throws with what's allowed. */
-export function parseSetting(key, value) {
-  if (key === "place") {
-    const v = String(value).toLowerCase();
-    if (!PLACES.includes(v)) throw new Error(`place must be one of ${PLACES.join(", ")}`);
-    return v;
+/** config.json as written (an empty object when it's missing or unreadable). `strict`: throw when it exists but
+ *  isn't valid JSON, so a write doesn't replace a hand edit with a typo in it. */
+export function readConfigFile({ strict = false } = {}) {
+  let text;
+  try { text = readFileSync(CONFIG_FILE, "utf8"); } catch { return {}; }
+  try { const raw = JSON.parse(text); return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}; }
+  catch (e) {
+    if (strict) throw new Error(`${CONFIG_FILE} isn't valid JSON (${e.message}); fix it or delete it first`);
+    return {};
   }
-  if (key === "width" || key === "height") {
-    const v = size(value);
-    if (v === null) throw new Error(`${key} must be px (200 or more) or a share of the window (0 to 1)`);
-    return v;
-  }
-  if (key === "focus") {
-    const v = bool(value);
-    if (v === null) throw new Error("focus must be true or false");
-    return v;
-  }
-  if (key === "arrive") {
-    const v = String(value).toLowerCase();
-    if (!ARRIVALS.includes(v)) throw new Error(`arrive must be one of ${ARRIVALS.join(", ")}`);
-    return v;
-  }
-  throw new Error(`unknown setting "${key}" (known: ${Object.keys(DEFAULTS).join(", ")})`);
-}
-
-/** The settings in config.json alone (invalid entries dropped). */
-export function readConfigFile() {
-  let raw = {};
-  try { raw = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) ?? {}; } catch {}
-  const out = {};
-  for (const k of Object.keys(DEFAULTS)) {
-    if (raw[k] === undefined) continue;
-    try { out[k] = parseSetting(k, raw[k]); } catch {}
-  }
-  return out;
 }
 
 /** The settings in effect. `place`: a per-call override (ignored when not a known place). */
 export function loadConfig({ place } = {}) {
-  const cfg = { ...DEFAULTS, ...readConfigFile() };
+  const cfg = core.merge(DEFAULTS, readConfigFile());
   const env = process.env.HERDR_REVIEW_PLACE?.toLowerCase();
-  if (env && PLACES.includes(env)) cfg.place = env;
-  if (place && PLACES.includes(String(place).toLowerCase())) cfg.place = String(place).toLowerCase();
+  if (env && core.PLACES.includes(env)) cfg.window.place = env;
+  const p = place && String(place).toLowerCase();
+  if (p && core.PLACES.includes(p)) cfg.window.place = p;
   return cfg;
 }
 
-/** Sets one setting in config.json (null removes it, back to the default). Returns the file's settings. */
-export function setConfig(key, value) {
-  const cur = readConfigFile();
-  if (value === null) {
-    if (!(key in DEFAULTS)) throw new Error(`unknown setting "${key}"`);
-    delete cur[key];
-  } else cur[key] = parseSetting(key, value);
-  const dir = join(APP_HOME, "data", "review");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+/** Every setting's dotted path, its value in effect and where it comes from (default, config or $HERDR_REVIEW_PLACE). */
+export function describeConfig() {
+  const raw = readConfigFile();
+  const cfg = loadConfig();
+  const src = core.sources(DEFAULTS, raw);
+  return core.leaves(DEFAULTS).map((path) => {
+    let from = src[path];
+    if (path === "window.place" && cfg.window.place !== core.merge(DEFAULTS, raw).window.place) from = "$HERDR_REVIEW_PLACE";
+    return { path, value: core.get(cfg, path), from };
+  });
+}
+
+/** A dotted path, or an old flat key (place → window.place). */
+export const resolvePath = (key) => core.LEGACY[key] ?? key;
+
+/** Writes settings `cfg` (a full or partial nested object) to config.json, keeping only what differs from the defaults. */
+export function writeConfig(cfg) {
+  const raw = readConfigFile({ strict: true });
+  const next = core.toFile(DEFAULTS, core.merge(DEFAULTS, cfg), raw);
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   const tmp = `${CONFIG_FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(cur, null, 2) + "\n");
+  writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n");
   renameSync(tmp, CONFIG_FILE);
-  return cur;
+  return next;
+}
+
+/** Sets one setting (a dotted path or a flat key). `value`: text to parse into the setting's type, or null for the
+ *  default. Throws with what's allowed. Returns what config.json now holds. */
+export function setConfig(key, value) {
+  const path = resolvePath(key);
+  const cur = core.merge(DEFAULTS, readConfigFile({ strict: true }));
+  if (value === null) {
+    if (core.get(DEFAULTS, path) === undefined) throw new Error(`unknown setting "${key}"`);
+    core.set(cur, path, core.get(DEFAULTS, path));
+  } else core.set(cur, path, core.parse(DEFAULTS, path, value));
+  return writeConfig(cur);
+}
+
+/** Creates config.json (just `$schema`) when there isn't one, so an editor can open it with completion. */
+export function ensureConfigFile() {
+  if (!existsSync(CONFIG_FILE)) writeConfig({});
+  return CONFIG_FILE;
 }
