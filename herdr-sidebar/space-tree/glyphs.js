@@ -12,11 +12,17 @@ export const GLYPHS = [
   "bomb", "trophy", "flag", "shield", "feather", "palette", "telescope", "tent",
 ];
 
+/** @import { Overrides, Icon } from "./types" */
+
 // Theme color names, looked up in theme() at render time so the rail follows
 // the applied theme (catppuccin: red, yellow, green, teal, blue, pink, mauve).
 export const COLORS = ["ansi1", "ansi3", "ansi2", "ansi6", "ansi4", "ansi5", "accent"];
 
 // 32-bit FNV-1a.
+/**
+ * @param {string} text
+ * @returns {number}
+ */
 function fnv1a(text) {
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
@@ -28,6 +34,11 @@ function fnv1a(text) {
 
 // A space's icon from its name. `overrides`: { "<lowercase name>": { glyph: index|name, color: index|theme name|"#hex" } }.
 // Returns { glyph: icon name, color: a theme color name or "#rrggbb" }.
+/**
+ * @param {string} name
+ * @param {Overrides} [overrides]
+ * @returns {Icon}
+ */
 export function iconFor(name, overrides = {}) {
   const key = (name ?? "").trim().toLowerCase();
   const h = fnv1a(key);
@@ -44,7 +55,12 @@ export function iconFor(name, overrides = {}) {
 }
 
 // "#rrggbb" or "#rrggbbaa" at opacity `a` (0..1).
+/**
+ * @param {string} hex
+ * @param {number} a
+ * @returns {import("gpui-kit").Color}
+ */
 export function alpha(hex, a) {
   const base = String(hex).slice(0, 7);
-  return base + Math.round(a * 255).toString(16).padStart(2, "0");
+  return /** @type {import("gpui-kit").Color} */ (base + Math.round(a * 255).toString(16).padStart(2, "0"));
 }
