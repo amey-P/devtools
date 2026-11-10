@@ -2,6 +2,16 @@
 // Prints nothing (Claude's normal prompt shows) when not inside herdr-app or when the
 // person dismisses the review. Closing the window (✕, Esc) only puts it off: the hook keeps
 // waiting until the person decides from the review inbox.
+/** Claude's stdin payload for a PermissionRequest hook: `tool_input` is the ExitPlanMode tool's input bag (the
+ *  plan lives in plan), `cwd` / `session_id` identify the asking session. Parsed straight from stdin, so
+ *  tool_input stays an unknown-valued bag. */
+/** @typedef {{ tool_input?: { plan?: unknown; [k: string]: unknown }; cwd?: string; session_id?: string }} ClaudeHook */
+
+/** What this hook prints to stdout (the hookSpecificOutput payload Claude reads): an allow whose updatedInput
+ *  heads into auto mode (via setMode, or Claude's own plan dialog shows), or a deny with the reason. */
+/** @typedef {{ behavior: "deny" | "allow"; message?: string; updatedInput?: { [k: string]: unknown };
+ *             updatedPermissions?: { type: string; mode: string; destination: string }[] }} HookOut */
+
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +22,7 @@ const bridgePath = join(appHome, "mods", "review", "bin", "bridge.mjs");
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 
+/** @type {ClaudeHook} */
 let hook = {};
 try { hook = JSON.parse(input); } catch { process.exit(0); }
 const plan = hook.tool_input?.plan;
@@ -20,6 +31,7 @@ if (typeof plan !== "string" || !plan.trim()) process.exit(0);
 let bridge;
 try { bridge = await import(pathToFileURL(bridgePath).href); } catch { process.exit(0); }
 
+/** @param {HookOut} decision */
 const out = (decision) => process.stdout.write(JSON.stringify({
   hookSpecificOutput: { hookEventName: "PermissionRequest", decision },
 }));
