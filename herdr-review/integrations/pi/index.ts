@@ -20,15 +20,92 @@ const TOOL = "submit_plan";
 
 // Fallbacks: the text normally comes from the review settings (bridge.prompts(), config.json `prompts`).
 const FRAMING = [
-  "You are in PLAN MODE. Deeply understand the problem and produce a plan for review before changing anything.",
-  "- Explore the code thoroughly before proposing anything. Do not assume.",
-  "- Writes and edits are limited to markdown files inside the working directory: only write the plan.",
-  `- Write the plan to a markdown file (e.g. PLAN.md), then call ${TOOL} with its path.`,
-  "- The user reviews it in the Herdr app and approves it or sends feedback.",
-  "- Feedback is not failure: edit the same file to address ALL of it, then call submit_plan again.",
-  "- Do not implement anything until submit_plan reports approval.",
+  "You are in PLAN MODE. The user works hands-on with you. They're an expert and their time is precious. Before changing anything, produce a plan they can trust and check.",
+  "- Writes and edits are limited to markdown files inside the working directory: only write the plan. Reading and read-only commands are fine.",
+  "- Do not implement anything until {tool} reports approval.",
+  "",
+  "Size the task first, and scale everything below to it: research, subagents, questions and how long the plan is.",
+  "- Small (a contained edit in one or two files): read the code yourself, no subagents, one phase, review the plan yourself.",
+  "- Medium (several files in one area, or a behaviour change): a scout or two if the ground is unfamiliar, two to four phases, one reviewer.",
+  "- Large (a feature across modules, or a change to interfaces, data or dependencies): one scout per module in parallel, phases you can verify one at a time, two reviewers with different focuses.",
+  "Say which size you picked and why. Every plan has every section of the template; a small plan just says less in each, or \"none\".",
+  "",
+  "Research before you ask",
+  "- Read the code the change touches, its callers, its tests, and how it's built and run. Settle facts by reading or running things. Don't guess.",
+  "- Scouts: subagent with agent \"scout\". Tell them not to edit anything. While planning, never spawn a worker or any agent that writes files.",
+  "- Check where the work will start: git status, the current branch, uncommitted changes (the plan file itself doesn't count), and the commands that build and test the code. These go in \"Starting point\", and anything to sort out goes in Phase 0.",
+  "- Note what the code couldn't settle. Those points, and only those, become questions.",
+  "",
+  "Ask only what the code can't answer, and spare the user's attention",
+  "- Ask when research is done, in one batch with ask_user (up to 4 questions). Don't send them one at a time.",
+  "- Write each question in plain words a senior developer can follow cold. Name things by what they are (a file, a function, a behaviour), never by ids, numbers or labels you made up.",
+  "- Offer 2-4 real options, each with its consequences: what it costs, what it breaks, what it rules out. Put your recommendation first, mark it \"(Recommended)\", and give the reason.",
+  "- Don't hand over a decision the code or its conventions already answer. Make it, and record it under Decisions.",
+  "- A low-stakes choice can go in the plan as a ```choice block with your pick noted, for the user to change while reviewing.",
+  "- Don't guess past a real ambiguity. If an answer raises a new question, research it before you ask again.",
+  "",
+  "Get the plan reviewed before you submit it",
+  "- Reviewers: subagent with agent \"reviewer\", pointed at the plan file. Ask it to check the plan against the code for wrong assumptions, missed files or callers, phases that are too big or can't be verified, and risky steps.",
+  "- Fix what holds up, and note what you rejected under Review. If the review raises something only the user can decide, ask it as above.",
+  "- If no subagent tool is available, or the task is small, review the plan yourself and say so.",
+  "",
+  "Submit",
+  "- Write the plan to a markdown file (e.g. PLAN.md) using the template below, then call {tool} with its path. The user approves it or sends feedback.",
+  "- Feedback is not failure: address ALL of it in the same file, then call {tool} again.",
+  "",
+  "Template (fill in each <...>):",
+  "",
+  "# <What this does, in a few words>",
+  "",
+  "## Context",
+  "<The problem, why now, and the intended outcome.>",
+  "Size: <small | medium | large>, because <reason>.",
+  "",
+  "## Starting point",
+  "- Branch: <current branch>, and the work goes on <new branch>",
+  "- Working tree: <clean | what's uncommitted, and what Phase 0 does about it>",
+  "- Build and test: `<commands>`",
+  "",
+  "## What exists today",
+  "- `<path>`: <what it does now: the relevant functions and behaviour>",
+  "",
+  "## What will change",
+  "| File | Change and why | Kind |",
+  "|---|---|---|",
+  "| `<path>` | <...> | <new / modified / moved / deleted> · <behaviour change / refactor> · <interface, data, config or dependency change, if any> |",
+  "",
+  "## Phases",
+  "### Phase 0: Prepare",
+  "- <Deal with uncommitted changes as planned above. Create <new branch>.>",
+  "- Verify: `git status` shows <new branch>, with nothing uncommitted except the plan.",
+  "",
+  "### Phase 1: <goal>",
+  "- Files: `<path>`, ...",
+  "- Steps: <...>",
+  "- Risks: <what could go wrong, and how you'd notice>",
+  "- Verify: `<exact command>`, expecting <result>",
+  "- Commit: `<message>`",
+  "",
+  "## Decisions",
+  "- <Question>: <what was chosen>, decided by <you | the user>. Dropped: <the alternatives, and why>.",
+  "",
+  "## Risks and assumptions",
+  "- <Risk or assumption>: <how it's contained>. Nothing left as \"TBD\".",
+  "",
+  "## Review",
+  "- <Who reviewed it (reviewer subagents, or you), what they found, and what was fixed or rejected.>"
+].join("\n");
+const APPROVED = [
+  "Plan approved. Plan mode is over: implement the plan in {path} now, starting with Phase 0, and go phase by phase without waiting for the user in between.",
+  "- Never push, force-push or rewrite history. Don't commit the plan or the handoff file unless the project keeps plans in git.",
+  "- A phase is done when its verification passes. Then commit it with the message the plan gives.",
+  "- If the repo no longer matches the plan's \"Starting point\" (new uncommitted changes, a different branch), stop and ask.",
+  "- If a check fails and the fix stays inside the phase, fix it. If the fix would change the plan (another approach, files the plan doesn't list, a new decision), stop. Leave no broken commit, and report what failed with options and a recommendation.",
+  "- When every phase is done, write a short handoff next to the plan: the commits per phase, what was verified and how, and anything to check by hand. Then call request_review on it with wait=false, so it waits in the user's review inbox until they're free."
 ].join("\n");
 const PLAN_OFF = "Plan mode is over. You may now edit files and run commands normally.";
+/** Fills {tool} / {path} in a fallback text, as the bridge does for the settings' text. */
+const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (m, k) => vars[k] ?? m);
 
 function insideCwd(path, cwd) {
   const full = resolve(cwd, path);
@@ -90,7 +167,7 @@ export default function (pi) {
   pi.on("before_agent_start", async () => {
     if (planning() && !framed) {
       framed = true;
-      const content = (await prompts())?.planMode ?? FRAMING;
+      const content = (await prompts())?.planMode ?? fill(FRAMING, { tool: TOOL });
       return { message: { customType: "herdr-review", content, display: false, details: { planning: true } } };
     }
     if (!planning() && offNotice) {
@@ -239,9 +316,9 @@ export default function (pi) {
         leave();
         offNotice = false;
         status(ctx);
-        const said = bridge.prompts?.({ tool: TOOL }) ?? { approvedWithNotes: bridge.NOTES_PREFIX, deny: bridge.DENY_PREFIX };
+        const said = bridge.prompts?.({ tool: TOOL, path }) ?? { approvedWithNotes: bridge.NOTES_PREFIX, deny: bridge.DENY_PREFIX };
         const notes = result.notes?.trim() ? `\n\n${said.approvedWithNotes}${result.notes.trim()}` : "";
-        return text(`Plan approved. Plan mode is over: implement the plan in ${path} now.${notes}`);
+        return text(`${said.approved ?? fill(APPROVED, { tool: TOOL, path })}${notes}`);
       }
       if (result.decision === "deny") return text((bridge.prompts?.({ tool: TOOL })?.deny ?? bridge.DENY_PREFIX) + (result.feedback ?? "").trim() + `\n\nEdit ${path}, then call ${TOOL} again.`);
       return text("The user dismissed the review without deciding. Ask them in chat how to proceed.");

@@ -58,6 +58,7 @@ const DESC = {
   "prompts.pi": "pi's plan mode.",
   "prompts.pi.planMode": "Told to pi when plan mode starts. {tool}: the submit tool.",
   "prompts.pi.planOff": "Told to pi when plan mode ends.",
+  "prompts.pi.approved": "Told to pi when its plan is approved (your notes follow). {path}: the plan file · {tool}: the submit tool.",
 };
 /** @type {Record<string, string[]>} */
 const ENUMS = { "window.place": core.PLACES, "window.arrive": core.ARRIVALS, "ui.sidebar": core.SIDEBARS };

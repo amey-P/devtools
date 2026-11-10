@@ -80,7 +80,7 @@ export interface Prompts {
     sections: Record<"remove" | "change" | "on" | "decision" | "general" | "generalOnly", Text>;
   };
   notes: { plan: { heading: Text; intro: Text }; other: { heading: Text; intro: Text } };
-  pi: { planMode: Text; planOff: Text };
+  pi: { planMode: Text; planOff: Text; approved: Text };
 }
 
 /** The settings in effect (ui.js readConfig(): config-core merge() of the defaults and config.json). */

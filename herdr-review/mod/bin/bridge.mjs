@@ -428,12 +428,15 @@ export function sendLater(terminal, text, delayMs = 1500) {
 
 /** What the agent is told, from the settings (config.json `prompts`, see config.mjs): read on every call, so an edit
  *  applies to the next decision. `deny` goes before the feedback when a plan is sent back; `approvedWithNotes` before
- *  the notes on an approved plan; `planMode` / `planOff` frame pi's plan mode (`tool`: its submit tool's name).
- *  @param {{ tool?: string }} [opts] @returns {{ deny: string; approvedWithNotes: string; planMode: string; planOff: string }} */
-export function prompts({ tool = "submit_plan" } = {}) {
+ *  the notes on an approved plan; `planMode` / `planOff` frame pi's plan mode and `approved` is what pi is told once its
+ *  plan is approved (`tool`: its submit tool's name, `path`: the plan file).
+ *  @param {{ tool?: string, path?: string }} [opts]
+ *  @returns {{ deny: string; approvedWithNotes: string; planMode: string; planOff: string; approved: string }} */
+export function prompts({ tool = "submit_plan", path = "the plan file" } = {}) {
   const p = loadConfig().prompts;
   return { deny: text(p.deny), approvedWithNotes: text(p.approvedWithNotes),
-    planMode: text(p.pi.planMode, { tool }), planOff: text(p.pi.planOff, { tool }) };
+    planMode: text(p.pi.planMode, { tool }), planOff: text(p.pi.planOff, { tool }),
+    approved: text(p.pi.approved, { tool, path }) };
 }
 // Kept for integrations installed before prompts() (Claude caches its plugin per version).
 export const DENY_PREFIX = prompts().deny;
