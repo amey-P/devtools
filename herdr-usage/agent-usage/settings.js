@@ -9,19 +9,34 @@ import { theme, appHome, readTextFile, writeTextFile, notify, closeOverlay, watc
 import * as fs from "fs/promises";
 import * as cfg from "./config.js";
 
+/** @import {ScanSettings, Service, ServiceSettings, Theme, UsageConfig} from "./types" */
+
+/** The editable draft of an effective config: same shape, but values typed as the raw number /
+ *  boolean a setting holds, so valueAt()/setValue() can read and write them at string paths. */
+/** @typedef {{ scan: Record<string, number | boolean> & ScanSettings, services: Record<string, ServiceSettings & Record<string, number | boolean>> }} Draft */
+
+/** @param {UsageConfig} v @returns {Draft} */
 const clone = (v) => JSON.parse(JSON.stringify(v));
+/** @type {import("gpui-shell").TransitionPolicy} */
 const SOFT = { duration: 160, easing: "ease-out" };
 const CACHE_NOTE = "~/.cache/herdr-agent-usage (or $XDG_CACHE_HOME/herdr-agent-usage)";
+/** @param {import("gpui-kit").MouseButtonEvent} _e @param {import("gpui-kit").Context} cx */
 const stopPress = (_e, cx) => cx.stop_propagation(); // a press the window must not take as a drag
 const SCAN_ROWS = [
   ["everyMinutes", "Rescan every", "How often the widget re-reads session logs for tokens and cost."],
   ["limitsEveryMinutes", "Limits every", "How often plan limits are fetched (Claude and OpenCode Go are rate-limited server-side; Codex limits come from its logs)."],
 ];
 
+/** Fades a hex color: keeps the #rrggbb and appends a new alpha byte.
+ *  @param {import("gpui-kit").Color} hex
+ *  @param {number} a
+ *  @returns {import("gpui-kit").Color}
+ */
 function alpha(hex, a) {
   if (typeof hex !== "string" || !hex.startsWith("#") || hex.length < 7) return hex;
-  return hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  return /** @type {import("gpui-kit").Color} */ (hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0"));
 }
+/** @param {string} [iso] @returns {string} */
 function fmtAgo(iso) {
   const s = Math.round((Date.now() - Date.parse(iso ?? "")) / 1000);
   if (!(s >= 0)) return "not yet";
@@ -31,7 +46,10 @@ function fmtAgo(iso) {
 }
 
 export class Settings {
-  /** `overlay`: the floating window's id (closes it). Runs inside the view's init (a live host call). */
+  /** `overlay`: the floating window's id (closes it). Runs inside the view's init (a live host call).
+   *  @param {string} overlay
+   *  @param {import("gpui-kit").AsyncContext} cx
+   */
   constructor(overlay, cx) {
     this.overlay = overlay;
     this.h = cx.focus_handle();
@@ -46,9 +64,11 @@ export class Settings {
     this.saving = false;
     this.clearing = false;
     this.services = cfg.DEFAULT_SERVICES;
+    /** @type {Record<string, string>} */
     this.errors = {};       // path → what's wrong with the typed value
     this.nodeVersion = null;
     // Input states need a live host call: make them all now (never after an await), fill them on load.
+    /** @type {Record<string, import("gpui-base").InputState>} */
     this.inputs = {};
     for (const [f] of SCAN_ROWS) this.inputs[`scan.${f}`] = this.numberState(`scan.${f}`);
 
@@ -71,6 +91,9 @@ export class Settings {
 
   // ---- model -----------------------------------------------------------------
 
+  /** Re-reads services.json and config.json into `saved` (and into a clean `draft`).
+   *  @param {import("gpui-kit").AsyncContext} cx
+   */
   async load(cx) {
     try {
       const [svcText, rawText] = await Promise.all([
@@ -97,13 +120,22 @@ export class Settings {
 
   get dirty() { return this.loaded && cfg.changedPaths(this.draft, this.saved).length > 0; }
   get errorCount() { return Object.keys(this.errors).length; }
+  /** The draft value at `path` ("scan.everyMinutes", "services.<key>.enabled|hidden").
+   *  @param {string} path
+   *  @returns {number | boolean}
+   */
   valueAt(path) {
     const [head, key, field] = path.split(".");
     return head === "scan" ? this.draft.scan[key] : this.draft.services[key]?.[field];
   }
+  /** @param {string} path @returns {boolean} */
   isDefault(path) { return this.valueAt(path) === cfg.defaultAt(this.services, path); }
 
-  /** Sets a draft value, or records why it can't be. */
+  /** Sets a draft value, or records why it can't be. `path` addresses one setting:
+   *  "scan.<everyMinutes|limitsEveryMinutes>" holds a number, "services.<key>.<enabled|hidden>" a boolean.
+   *  @param {string} path
+   *  @param {number | boolean} value
+   */
   setValue(path, value) {
     const why = cfg.problem(path, value);
     if (why) { this.errors[path] = why; return; }
@@ -113,7 +145,9 @@ export class Settings {
     else this.draft.services[key][field] = value;
   }
 
-  /** Back to the default, in the draft and in its field. */
+  /** Back to the default, in the draft and in its field.
+   *  @param {string} path
+   */
   resetField(path) {
     const def = cfg.defaultAt(this.services, path);
     delete this.errors[path];
@@ -131,6 +165,10 @@ export class Settings {
 
   // ---- inputs ----------------------------------------------------------------
 
+  /** A number field's state: valid typing sets the draft value, invalid typing records the error.
+   *  @param {string} path
+   *  @returns {import("gpui-base").InputState}
+   */
   numberState(path) {
     const s = InputState.new({});
     s.on("change", (_e, cx) => {
@@ -143,6 +181,9 @@ export class Settings {
     return s;
   }
 
+  /** Puts the draft value at `path` back into its input state.
+   *  @param {string} path
+   */
   fillInput(path) {
     const s = this.inputs[path];
     if (!s) return;
@@ -169,6 +210,10 @@ export class Settings {
     this.release();
   }
 
+  /** Writes the draft's changed paths through config.updateConfig, then reloads. Guarded upstream
+   *  by dirty / errorCount / parseError, so only valid drafts reach the write.
+   *  @param {import("gpui-kit").AsyncContext} cx
+   */
   async save(cx) {
     if (!this.dirty || this.errorCount || this.saving || this.parseError) return;
     this.saving = true;
@@ -190,6 +235,9 @@ export class Settings {
     cx.notify();
   }
 
+  /** Runs the scanner with --reset-cache (Node in PATH), then asks the widget to rescan.
+   *  @param {import("gpui-kit").AsyncContext} cx
+   */
   async clearCache(cx) {
     if (this.clearing) return;
     this.clearing = true;
@@ -206,6 +254,10 @@ export class Settings {
     cx.notify();
   }
 
+  /** Esc closes the window, cmd/ctrl-s saves.
+   *  @param {import("gpui-kit").KeyEvent} e
+   *  @param {import("gpui-kit").Context} cx
+   */
   onKey(e, cx) {
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
     if (k === "escape") this.close();
@@ -217,6 +269,12 @@ export class Settings {
 
   // ---- pieces ----------------------------------------------------------------
 
+  /** A small rounded chip; `solid` fills it with the accent, else it gets the surface treatment.
+   *  @param {string} id
+   *  @param {Theme} t
+   *  @param {{ label?: string, onClick?: (cx: import("gpui-kit").Context) => void, disabled?: boolean, solid?: boolean, tooltip?: string }} [opts]
+   *  @returns {import("gpui-kit").Element}
+   */
   btn(id, t, { label, onClick, disabled = false, solid = false, tooltip } = {}) {
     const base = h_flex().id(id).h(26).px(10).gap(6).items_center().rounded(7).text_size(12).font_medium()
       .on_mouse_down("left", stopPress)
@@ -229,7 +287,12 @@ export class Settings {
     return base.child(label);
   }
 
-  /** A switch for a boolean setting. `invert`: drawn on when the stored value is false ("in strip" ↔ hidden). */
+  /** A switch for a boolean setting. `invert`: drawn on when the stored value is false ("in strip" ↔ hidden).
+   *  @param {string} path
+   *  @param {Theme} t
+   *  @param {{ invert?: boolean }} [opts]
+   *  @returns {import("gpui-kit").Element}
+   */
   toggle(path, t, { invert = false } = {}) {
     const value = !!this.valueAt(path);
     const on = invert ? !value : value;
@@ -245,7 +308,11 @@ export class Settings {
         .bg(on ? t.background : t.muted));
   }
 
-  /** Dot + "reset" chip after a label whose value isn't the default. */
+  /** Dot + "reset" chip after a label whose value isn't the default; null keeps the row clean.
+   *  @param {Theme} t
+   *  @param {string} path
+   *  @returns {import("gpui-kit").Element | null}
+   */
   changeMark(t, path) {
     if (!this.loaded || this.isDefault(path)) return null;
     return h_flex().gap(6).items_center()
@@ -255,7 +322,16 @@ export class Settings {
         .on_click((_e, cx) => { cx.stop_propagation(); this.resetField(path); cx.notify(); }).child("reset"));
   }
 
-  /** A setting: label + hint on the left, `control` on the right. */
+  /** A setting: label + hint on the left, `control` on the right; when setting=false it's an
+   *  informational row (no change mark, no error line).
+   *  @param {Theme} t
+   *  @param {string} path
+   *  @param {string} label
+   *  @param {string} hint
+   *  @param {import("gpui-kit").Element} control
+   *  @param {{ setting?: boolean }} [opts]
+   *  @returns {import("gpui-kit").Element}
+   */
   row(t, path, label, hint, control, { setting = true } = {}) {
     const err = this.errors[path];
     const mark = setting ? this.changeMark(t, path) : null;
@@ -269,6 +345,12 @@ export class Settings {
       .child(text).child(div().flex_none().child(control));
   }
 
+  /** The whole-number input for a scan cadence setting, with the unit label after it.
+   *  @param {string} path
+   *  @param {string} unit
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   number(path, unit, t) {
     const err = !!this.errors[path];
     return h_flex().gap(6).items_center()
@@ -277,6 +359,12 @@ export class Settings {
       .when(!!unit, (el) => el.child(div().w(30).text_size(11.5).text_color(t.dim).child(unit)));
   }
 
+  /** The service's square badge: its icon (or the initial), tinted with the brand color.
+   *  @param {Service} svc
+   *  @param {Theme} t
+   *  @param {number} [size]
+   *  @returns {import("gpui-kit").Element}
+   */
   glyphEl(svc, t, size = 24) {
     const initial = (svc.label ?? svc.key ?? "?").trim().charAt(0).toUpperCase() || "?";
     return h_flex().flex_none().size(size).rounded(Math.round(size * 0.3)).justify_center().items_center()
@@ -284,6 +372,7 @@ export class Settings {
       .child(svc.icon ? svg(svc.icon).size(Math.round(size * 0.6)) : div().text_size(11).child(initial));
   }
 
+  /** @param {Theme} t @param {string} title @param {string} [note] @returns {import("gpui-kit").Element} */
   section(t, title, note) {
     return v_flex().pt(16).pb(4).gap(2)
       .child(div().text_size(10.5).font_semibold().text_color(t.accent).child(title.toUpperCase()))
@@ -292,9 +381,16 @@ export class Settings {
 
   // ---- sections ----------------------------------------------------------
 
+  /** One service's row: badge, label, API chip and the two switches. A service absent from the
+   *  draft (not in services.json) draws empty — main.js's strip is the source of truth there.
+   *  @param {Service} svc
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   serviceRow(svc, t) {
     const kp = `services.${svc.key}`;
     if (!this.draft.services[svc.key]) return div();
+    /** @param {string} text @param {string} path @param {{ invert?: boolean }} [opts] @returns {import("gpui-kit").Element} */
     const labeled = (text, path, opts) => h_flex().gap(6).items_center()
       .child(div().text_size(11.5).text_color(t.dim).child(text))
       .child(this.toggle(path, t, opts));
@@ -310,12 +406,14 @@ export class Settings {
       .child(labeled("enabled", `${kp}.enabled`));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderServices(t) {
     return v_flex().gap(1)
       .child(this.section(t, "Services", "Enabled off stops scanning a service. In strip off keeps scanning it but leaves it out of the widget (the card's switch does the same). Labels, colors and matchers live in services.json."))
       .children(this.services.map((svc) => this.serviceRow(svc, t)));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderScan(t) {
     return v_flex().gap(1)
       .child(this.section(t, "Scanning", "The scanner reads the agents' session logs and — less often — the plan-limit APIs. It keeps 7 days of history."))
@@ -323,11 +421,12 @@ export class Settings {
         this.row(t, `scan.${f}`, label, `${hint} ${cfg.RANGES[f][0]}–${cfg.RANGES[f][1]} min.`, this.number(`scan.${f}`, "min", t))));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderData(t) {
     return v_flex().gap(1)
       .child(this.section(t, "Data"))
       .child(this.row(t, "data.scan", "Last scan", "When the widget last read usage.",
-        div().text_size(12).text_color(t.muted).child(fmtAgo(shared("agent-usage.lastScan"))), { setting: false }))
+        div().text_size(12).text_color(t.muted).child(fmtAgo(/** @type {string | undefined} */ (shared("agent-usage.lastScan")))), { setting: false }))
       .child(this.row(t, "data.node", "Node", "The scanner needs Node.js in PATH.",
         div().text_size(12).text_color(this.nodeVersion ? t.muted : t.blocked).child(this.nodeVersion ?? "not found"), { setting: false }))
       .child(this.row(t, "data.cache", "Scan cache", `${CACHE_NOTE}. Clearing it makes the next scan read the logs from scratch.`,
@@ -335,6 +434,7 @@ export class Settings {
           tooltip: "Delete the scanner's cache, then rescan", onClick: (cx) => cx.spawn(async (cx) => this.clearCache(cx)) }), { setting: false }));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderFiles(t) {
     return v_flex().gap(1)
       .child(this.section(t, "Files", "Your settings are saved next to the widget's defaults. Prices and API endpoints are code, not settings — they live in scan.mjs."))
@@ -346,6 +446,10 @@ export class Settings {
 
   // ---- view ----------------------------------------------------------------
 
+  /** The whole screen. main.js calls render() with no arguments; the theme default fills in.
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   render(t = theme()) {
     const root = v_flex().id("usage-settings").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
@@ -368,6 +472,7 @@ export class Settings {
       .child(this.renderFooter(t));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderHeader(t) {
     return v_flex().relative().flex_none().bg(t.chrome).border_b_1().border_color(t.border)
       .child(h_flex().relative().h(54).px(16).gap(10).items_center()
@@ -381,6 +486,7 @@ export class Settings {
           .child(this.btn("st-close", t, { label: "✕", tooltip: "Close (esc)", onClick: () => this.close() }))));
   }
 
+  /** @param {Theme} t @returns {import("gpui-kit").Element} */
   renderFooter(t) {
     const n = this.errorCount;
     const status = n ? `${n} field${n === 1 ? "" : "s"} to fix`

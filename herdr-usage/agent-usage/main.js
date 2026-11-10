@@ -25,6 +25,12 @@ import {
 import { Settings } from "./settings.js";
 import * as cfg from "./config.js";
 
+/** @import {LimitWindow, ProviderMeta, ProviderUsage, RawConfig, Theme, Totals} from "./types" */
+
+/** One `rows()` entry: the effective service (key/label/icon/brand/matchers from services.json or
+ *  the scan's meta, merged with the person's config) plus what scan.mjs reported for it. */
+/** @typedef {{ key: string, label: string, icon?: string | null, brand?: import("gpui-kit").Color | null, program?: string | null, apps?: string[], api: boolean, enabled: boolean, hidden: boolean, d: ProviderUsage | null, agents: import("herdr").AgentInfo[], windows: LimitWindow[], primary: LimitWindow | null, weekly: LimitWindow | null, status: import("herdr").Status | null }} Row */
+
 const BLOCK = "usage";            // the layout block this mod lives in
 const NARROW = 160;
 const ROW = 26;                   // compact row
@@ -32,7 +38,9 @@ const PAD = 6;                    // compact strip's top/bottom padding
 const TILE = 26;                  // rail tile
 const RAIL_GAP = 6;
 const CHECK_MS = 30_000;          // how often the cadence timer checks what's due
+/** @type {import("gpui-shell").TransitionPolicy} */
 const EXPAND = { duration: 160, easing: "ease-out" };
+/** @type {import("gpui-shell").TransitionPolicy} */
 const GLIDE = { duration: 420, easing: "ease-out" };
 
 // Row metadata (label/icon/brand and the live-agent matchers) comes from
@@ -40,6 +48,7 @@ const GLIDE = { duration: 420, easing: "ease-out" };
 // it can't be read). Edit that file to swap services in or out.
 
 // A live agent belongs to a service when its program key or app name matches.
+/** @param {import("herdr").AgentInfo} a @param {{ program?: string | null, apps?: string[] }} m @returns {boolean} */
 const owns = (a, m) => {
   const app = a.app ?? "";
   return (m.program && (a.program?.key === m.program || app.startsWith(m.program)))
@@ -47,14 +56,17 @@ const owns = (a, m) => {
 };
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1 };
 
+/** @param {import("gpui-kit").MouseButtonEvent} _e @param {import("gpui-kit").Context} cx */
 const stop = (_e, cx) => cx.stop_propagation();
 
 // "#rrggbb" + alpha → "#rrggbbaa" (same as space-tree's glyphs.js).
+/** @param {import("gpui-kit").Color | null} hex @param {number} a @returns {import("gpui-kit").Color | null} */
 function alpha(hex, a) {
   if (typeof hex !== "string" || !hex.startsWith("#") || hex.length < 7) return hex;
-  return hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  return /** @type {import("gpui-kit").Color} */ (hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0"));
 }
 
+/** @param {number} n @returns {string} */
 function fmtTokens(n) {
   if (!n) return "0";
   if (n < 1000) return String(n);
@@ -62,12 +74,16 @@ function fmtTokens(n) {
   if (n < 1e9) return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`;
   return `${(n / 1e9).toFixed(1)}B`;
 }
+/** @param {number} c @returns {string} */
 function fmtCost(c) {
   if (!c) return "$0";
   if (c < 0.01) return "<$0.01";
   if (c < 100) return `$${c.toFixed(2)}`;
   return `$${Math.round(c).toLocaleString("en-US")}`;
 }
+/** ISO time → time left ("3h 20m"), "" once the window has reset.
+ *  @param {string | null} iso @returns {string}
+ */
 function fmtIn(iso) {
   const ms = Date.parse(iso ?? "") - Date.now();
   if (!(ms > 0)) return "";
@@ -77,6 +93,10 @@ function fmtIn(iso) {
   if (h < 48) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+/** ISO time → "just now" / "5m ago" / "2h ago", "" before the first scan (this.data?.at is
+ *  undefined until then).
+ *  @param {string | null | undefined} iso @returns {string}
+ */
 function fmtAgo(iso) {
   const s = Math.round((Date.now() - Date.parse(iso ?? "")) / 1000);
   if (!(s >= 0)) return "";
@@ -86,15 +106,22 @@ function fmtAgo(iso) {
 }
 
 // Limit color: calm → warning → critical, from the theme's ANSI palette.
+/** @param {number} pct @param {Theme} t @returns {import("gpui-kit").Color} */
 const level = (pct, t) => (pct >= 80 ? t.ansi1 : pct >= 50 ? t.ansi3 : t.ansi2);
 
 export default class AgentUsage extends View {
+  /**
+   * @param {import("gpui-shell").Props | undefined} _props
+   * @param {import("gpui-kit").AsyncContext} cx
+   */
   init(_props, cx) {
     // The settings screen, in one floating window (mods/usage-settings, ⚙ in the card): this copy
     // renders it instead of the strip and stays out of the widget's work below.
     const p = props() ?? {};
     if (p.settings && p.float) { this.settings = new Settings(p.overlay, cx); return; }
+    /** @type {number} */
     this.width = 248;
+    /** @type {number} */
     this.detailH = 0;
     this.lastPx = null;
     this.busy = false;
@@ -108,11 +135,13 @@ export default class AgentUsage extends View {
     this.cfgError = null;
     this.writeError = null;
     this.services = cfg.DEFAULT_SERVICES;
+    /** @type {RawConfig} */
     this.raw = {};                // last config.json that parsed
     try { this.data = JSON.parse(localStorage.getItem("data") ?? "null"); } catch {}
     try { this.pinned = localStorage.getItem("pinned") === "1"; } catch {}
     // Services hidden from the strip used to live in localStorage; until migrateHidden has moved
     // them into config.json, keep honoring them so the strip doesn't flash them back on.
+    /** @type {string[]} */
     this.legacyHidden = [];
     try {
       const legacy = JSON.parse(localStorage.getItem("hidden") ?? "null");
@@ -131,6 +160,7 @@ export default class AgentUsage extends View {
     cx.timer.every(CHECK_MS, (cx) => {
       // Slack of half a check: the timer drifts, and "59.9 s since" shouldn't wait 30 s more.
       const now = Date.now();
+      /** @param {number} last @param {number} min @returns {boolean} */
       const due = (last, min) => now - last >= min * 60_000 - CHECK_MS / 2;
       const scan = due(this.lastScanAt, this.cfg.scan.everyMinutes);
       const limits = due(this.lastLimitsAt, this.cfg.scan.limitsEveryMinutes);
@@ -187,7 +217,10 @@ export default class AgentUsage extends View {
     this.cfg = this.computeCfg();
   }
 
-  /** Writes config.json through config.updateConfig, then reloads. Errors show on the card. */
+  /** Writes config.json through config.updateConfig, then reloads. Errors show on the card.
+   *  @param {(raw: RawConfig) => void} mutate
+   *  @returns {Promise<boolean>}
+   */
   async writeConfig(mutate) {
     try {
       this.raw = await cfg.updateConfig(this.cfgPath, this.cfgDir, mutate, this.io);
@@ -218,7 +251,10 @@ export default class AgentUsage extends View {
     this.cfg = this.computeCfg();
   }
 
-  /** A service as the widget sees it: services.json entry (or the scan's meta) + the person's config. */
+  /** A service as the widget sees it: services.json entry (or the scan's meta) + the person's config.
+   *  @param {string} key
+   *  @param {ProviderMeta} [meta]
+   */
   effectiveService(key, meta) {
     const svc = this.services.find((s) => s.key === key) ?? { key, label: key, ...(meta ?? {}) };
     return { ...svc, label: svc.label ?? key, ...(this.cfg.services[key] ?? cfg.serviceOf(svc, {})) };
@@ -227,6 +263,12 @@ export default class AgentUsage extends View {
   /** Keys of the services to scan, in services.json order. */
   enabledKeys() { return this.services.filter((s) => this.cfg.services[s.key]?.enabled !== false).map((s) => s.key); }
 
+  /** Runs scan.mjs for the enabled services and stores the result: `data`, localStorage and the
+   *  shared "agent-usage.lastScan". `limits`: also fetch the plan-limit APIs. A request made while
+   *  a scan is running is remembered in `pending` and re-run when it ends.
+   *  @param {import("gpui-kit").AsyncContext} cx
+   *  @param {boolean} limits
+   */
   refresh(cx, limits) {
     if (this.busy) {
       // Asked for while a scan runs (a settings save, the ↻): run once more when it ends.
@@ -267,12 +309,17 @@ export default class AgentUsage extends View {
     this.settings?.dispose();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   togglePin(cx) {
     this.pinned = !this.pinned;
     try { localStorage.setItem("pinned", this.pinned ? "1" : "0"); } catch {}
     cx.notify();
   }
 
+  /** persistently hides a service from the strip (config.json services.<key>.hidden).
+   *  @param {string} key
+   *  @param {import("gpui-kit").Context} cx
+   */
   toggleHidden(key, cx) {
     const hidden = !this.effectiveService(key).hidden;
     cx.spawn(async (cx) => {
@@ -281,6 +328,7 @@ export default class AgentUsage extends View {
     });
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   showAll(cx) {
     cx.spawn(async (cx) => {
       const keys = this.hiddenKeys();
@@ -296,10 +344,16 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- model
 
+  /** One row per visible service: the effective service merged with everything scan.mjs reported
+   *  for it — the single thing the strip and the detail card draw from.
+   *  @returns {Row[]}
+   */
   rows() {
     const live = agents();
+    /** @type {Row[]} */
     const out = [];
     for (const [key, raw] of Object.entries(this.data?.providers ?? {})) {
+      /** @type {ProviderUsage | null} */
       const d = raw ?? null;
       // Effective service: scan meta (label/icon/brand/matchers) + the person's config.json overrides.
       const m = this.effectiveService(key, d?.meta);
@@ -308,7 +362,7 @@ export default class AgentUsage extends View {
       const used = (d?.week?.msgs ?? 0) > 0 || d?.limits?.state === "ok";
       if (!used && mine.length === 0) continue;
       const windows = d?.limits?.state === "ok" ? d.limits.windows ?? [] : [];
-      const status = mine.reduce((s, a) => ((URGENCY[a.status] ?? 0) > (URGENCY[s] ?? 0) ? a.status : s), null);
+      const status = mine.reduce(/** @type {(s: import("herdr").Status | null, a: import("herdr").AgentInfo) => import("herdr").Status | null} */ ((s, a) => ((URGENCY[a.status] ?? 0) > (URGENCY[s] ?? 0) ? a.status : s)), null);
       out.push({ ...m, api: !!m.api, d, agents: mine, windows, primary: windows[0] ?? null,
         weekly: windows.find((w) => w.label === "week") ?? null, status });
     }
@@ -317,18 +371,36 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- pieces
 
+  /** The service's square badge; dimmed when the row isn't live (`on=false`).
+   *  @param {Row} r
+   *  @param {number} size
+   *  @param {Theme} t
+   *  @param {boolean} [on]
+   *  @returns {import("gpui-kit").Element}
+   */
   glyph(r, size, t, on = true) {
     return h_flex().flex_none().size(size).rounded(Math.round(size * 0.3)).justify_center().items_center()
       .bg(alpha(r.brand, on ? 0.18 : 0.1)).text_color(r.brand)
       .child(svg(r.icon).size(Math.round(size * 0.62)));
   }
 
+  /** A status dot; working/blocked pulse.
+   *  @param {import("herdr").Status} status
+   *  @param {Theme} t
+   *  @param {number} [size]
+   *  @returns {import("gpui-kit").Element}
+   */
   statusDot(status, t, size = 6) {
     return div().flex_none().size(size).rounded(Math.ceil(size / 2)).bg(t[status] ?? t.unknown)
       .when(status === "working", (d) => d.loop("opacity", { from: 0.35, to: 1, period: 1400 }))
       .when(status === "blocked", (d) => d.loop("opacity", { from: 0.3, to: 1, period: 700 }));
   }
 
+  /** One live agent: a dot that opens its terminal, tinted per state.
+   *  @param {import("herdr").AgentInfo} a
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   agentDot(a, t) {
     return div().id(`ad-${a.address}`).flex_none().size(7).rounded(4).cursor_pointer()
       .when(a.status === "idle", (d) => d.border_1().border_color(t.idle))
@@ -340,9 +412,11 @@ export default class AgentUsage extends View {
   }
 
   // A thin limit bar; `ticks` mark the other windows (weekly, monthly) on the same track.
+  /** @param {string} id @param {number} pct @param {Theme} t @param {number} h @param {number[]} [ticks] @returns {import("gpui-kit").Element} */
   bar(id, pct, t, h, ticks = []) {
     const p = Math.max(0, Math.min(100, pct ?? 0));
     const color = level(p, t);
+    /** @param {number} x @param {number} i @returns {import("gpui-kit").Element} */
     const mark = (x, i) => div().id(`${id}-tick-${i}`).absolute().top(-1).h(h + 2).w(2).rounded(1)
       .left(`${Math.max(0, Math.min(98, x))}%`).bg(alpha(t.foreground, 0.45));
     return div().id(id).relative().flex_1().min_w(0).h(h).rounded(h).bg(alpha(t.foreground, 0.08))
@@ -355,6 +429,7 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- compact
 
+  /** @param {Row} r @param {Theme} t @returns {import("gpui-kit").Element} */
   compactRow(r, t) {
     const value = r.primary ? `${Math.round(r.primary.pct)}%` : r.api ? "—" : fmtCost(r.d?.today?.cost ?? 0);
     const valueColor = r.primary ? level(r.primary.pct, t) : t.muted;
@@ -369,10 +444,21 @@ export default class AgentUsage extends View {
       .child(div().flex_none().w(6).child(r.status && r.status !== "idle" ? this.statusDot(r.status, t) : div()));
   }
 
+  /** Sum of a Totals block's token directions; 0 without a block.
+   *  @param {Totals} [b]
+   *  @returns {number}
+   */
   total(b) { return b ? b.in + b.out + b.cw + b.cr : 0; }
 
   // ---------------------------------------------------------------- detail
 
+  /** One plan-limit window inside the service's detail: label + percent left + reset time, over a bar.
+   *  @param {Row} r
+   *  @param {LimitWindow} w
+   *  @param {number} i
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   windowLine(r, w, i, t) {
     const resets = fmtIn(w.resets_at);
     return v_flex().gap(4)
@@ -383,6 +469,13 @@ export default class AgentUsage extends View {
       .child(h_flex().child(this.bar(`win-${r.key}-${i}`, w.pct, t, 5)));
   }
 
+  /** Tokens/cost headline: big token count with the unit label, "~" when estimated.
+   *  @param {string} label
+   *  @param {Totals | undefined} b
+   *  @param {boolean | undefined} estimated
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   stat(label, b, estimated, t) {
     return v_flex().flex_1().min_w(0).gap(1)
       .child(div().text_size(10.5).text_color(t.dim).child(label))
@@ -391,6 +484,11 @@ export default class AgentUsage extends View {
         .child(div().text_size(11).text_color(t.muted).child(`${estimated ? "~" : ""}${fmtCost(b?.cost ?? 0)}`)));
   }
 
+  /** The 7-day token sparkline (the scan's daily history).
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   spark(r, t) {
     const days = r.d?.daily ?? [];
     const max = Math.max(1, ...days.map((d) => d.tokens));
@@ -404,6 +502,12 @@ export default class AgentUsage extends View {
       }));
   }
 
+  /** A one-line hint when the limits aren't current (expired session, signed out, API error);
+   *  null when no explanation is needed.
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element | null}
+   */
   limitNote(r, t) {
     const s = r.d?.limits?.state;
     const text = s === "stale" ? `${r.label}: session expired — reconnect to refresh limits`
@@ -415,6 +519,7 @@ export default class AgentUsage extends View {
 
   // Show/hide this service in the strip (persisted; see toggleHidden). Drawn on
   // in the card, since that's where you turn a service off.
+  /** @param {Row} r @param {Theme} t @returns {import("gpui-kit").Element} */
   hideSwitch(r, t) {
     return div().id(`hide-${r.key}`).relative().w(30).h(17).rounded(9).cursor_pointer().flex_none()
       .bg(alpha(r.brand, 0.4)).border_1().border_color(alpha(r.brand, 0.6))
@@ -424,6 +529,12 @@ export default class AgentUsage extends View {
       .child(div().absolute().top(2).left(15).w(11).h(11).rounded(6).bg(r.brand ?? t.muted));
   }
 
+  /** One service's whole detail block in the card: badge, plan chip, live agents, window bars,
+   *  today/week stats and the 7-day sparkline.
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   section(r, t) {
     const plan = r.d?.limits?.plan;
     const note = this.limitNote(r, t);
@@ -445,6 +556,13 @@ export default class AgentUsage extends View {
       .when(!r.api && (r.d?.daily ?? []).length > 0, (el) => el.child(this.spark(r, t)));
   }
 
+  /** The card's scrollable body: every service's detail, a status/error line and the ⚙/refresh/
+   *  show-hidden buttons. `list` is rows() output, `idPrefix` keeps ids unique between copies.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @param {string} idPrefix
+   *  @returns {import("gpui-kit").Element}
+   */
   detail(list, t, idPrefix) {
     return v_flex().gap(12)
       .children(list.flatMap((r, i) => {
@@ -480,6 +598,12 @@ export default class AgentUsage extends View {
           .child(div().text_size(13).child("↻"))));
   }
 
+  /** The hover card wrap: bg/border/shadow around {@link AgentUsage.detail}.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @param {string} id
+   *  @returns {import("gpui-kit").Element}
+   */
   card(list, t, id) {
     return v_flex().w(260).p(12).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
       .child(this.detail(list, t, id));
@@ -487,13 +611,23 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- views
 
+  /** Grows/shrinks the strip's layout block to `px` (no-ops on repeats).
+   *  @param {number} px
+   */
   resizeTo(px) {
     px = Math.round(px);
     if (px === this.lastPx) return;
+    /** @type {number | null} */
     this.lastPx = px;
     run("layout.resize", { id: BLOCK, px });
   }
 
+  /** Sidebar-wide layout: the strip rows, plus the detail inline when pinned (layout.resize), else
+   *  a hover card on hover.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   wide(list, t) {
     const compactH = PAD * 2 + Math.max(1, list.length) * ROW;
     const open = this.pinned;
@@ -526,6 +660,11 @@ export default class AgentUsage extends View {
           .content(this.card(list, t, "card")));
   }
 
+  /** Narrow layout: one tile per service with a fill bar and status badge; hovering shows the card.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   rail(list, t) {
     this.resizeTo(PAD * 2 + Math.max(1, list.length) * (TILE + RAIL_GAP) - RAIL_GAP);
     return v_flex().size_full().py(PAD).gap(RAIL_GAP).items_center().justify_end()
