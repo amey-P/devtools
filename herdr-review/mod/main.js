@@ -74,6 +74,7 @@ export default class Review extends View {
     this.floating = !!this.overlay;
     this.closing = false;
     this.h = cx.focus_handle();
+    this.h.focus();  // now, so Esc closes the window even while it loads
     // A person-launched review (no spool request): what to show, and where its draft lives.
     this.launch = !this.id && (p.kind === "file" || p.kind === "reply") ? { kind: p.kind, file: expand(p.file ?? null), on: p.on ?? null } : null;
     this.pane = p.pane ?? focused()?.pane ?? null;
@@ -689,7 +690,11 @@ export default class Review extends View {
       .on_key_down((e, cx) => this.onKey(e, cx))
       // Clicks that land outside text and the editor give the keyboard back to the review.
       .on_mouse_down("left", () => this.h.focus());
-    if (this.status === "loading") return root.items_center().justify_center().child(div().text_size(13).text_color(t.dim).child("Loading…"));
+    // The frame (header, ✕) draws straight away; only the body waits for load().
+    if (this.status === "loading") return root.child(this.renderHeader(t))
+      .child(div().flex_1().min_h(0).flex().items_center().justify_center()
+        .when(this.floating, (el) => el.on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); }))
+        .child(div().text_size(13).text_color(t.dim).child("Loading…")));
     if (!this.req && !this.launch) return root.items_center().justify_center().child(div().text_size(13).text_color(t.muted).child(this.error ?? "Nothing to review."));
     const wide = this.width >= WIDE;
     const side = this.showSide;
@@ -711,12 +716,13 @@ export default class Review extends View {
       ? (p.tint ? svg(p.icon).size(18).flex_none().text_color(p.color ?? t.foreground) : image(p.icon).w(18).h(18).flex_none())
       : div().w(18).h(18).rounded(5).bg(t.accent).flex_none();
     const open = this.status === "open";
+    const loading = this.status === "loading";
     const n = this.anns.length;
     const compact = this.width > 0 && this.width < 720;
     const d = this.sent?.decision;
     const sendMode = this.mode === "send";
     const plan = this.kind === "plan";
-    const [stColor, stLabel] = open
+    const [stColor, stLabel] = loading ? [t.dim, "Loading…"] : open
       ? (sendMode
         ? (this.sending ? [t.working, "Sending…"]
           : n ? [t.accent, "Ready to send"]
@@ -746,9 +752,9 @@ export default class Review extends View {
         .child(h_flex().gap(7).items_center().text_size(11.5).text_color(t.dim).min_w(0)
           .child(dot(stColor, open, 7))
           .child(div().flex_none().text_color(open ? t.muted : stColor).child(stLabel))
-          .child(div().flex_none().child("·"))
-          .child(this.renderParent(t, sendMode, tabAgents, compact))
-          .when(!compact && counts.length > 0, (el) => el.child(div().flex_none().child("·"))
+          .when(!loading, (el) => el.child(div().flex_none().child("·"))
+            .child(this.renderParent(t, sendMode, tabAgents, compact)))
+          .when(!loading && !compact && counts.length > 0, (el) => el.child(div().flex_none().child("·"))
             .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(k, t))
               .child(icon(KINDS[k].icon, 11)).child(String(c)))))
           .when(!n && open && !compact, (el) => el.child(div().flex_none().child("·")).child(div().flex_none().child("No annotations")))))
@@ -769,8 +775,8 @@ export default class Review extends View {
             variant: "outline", color: plan ? t.blocked : t.accent, kbd: compact ? null : "⌘↵", onClick: (cx) => this.deny(cx) }))
           .child(btn("pr-approve", t, { ic: "check", label: plan ? "Approve" : "Looks good", variant: "solid", color: green(t), kbd: compact ? null : "⌘⇧↵",
             onClick: (cx) => this.approve(cx) }))))
-      .when(!this.settings, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
-      .child(btn("pr-settings", t, { ic: "settings", active: !!this.settings, tooltip: this.settings ? "Back to the review" : "Settings", onClick: (cx) => this.toggleSettings(cx) }))
+      .when(!loading && !this.settings, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
+      .when(!loading, (el) => el.child(btn("pr-settings", t, { ic: "settings", active: !!this.settings, tooltip: this.settings ? "Back to the review" : "Settings", onClick: (cx) => this.toggleSettings(cx) })))
       .when(open && this.mode === "decision" && !!this.id, (el) => el.child(btn("pr-dismiss", t, { label: compact ? null : "Dismiss", ic: compact ? "trash" : null,
         tooltip: `Stop waiting here: ${this.agentName} falls back to its own prompt`, onClick: (cx) => this.dismiss(cx) })))
       .when(this.floating, (el) => el.child(btn("pr-close", t, { ic: "x",
