@@ -24,7 +24,7 @@ export interface MarkdownOpts {
   /** Replaces the intro: a string with {subject}/{count}, or (count) => string. */
   intro?: string | ((count: number) => string);
   subject?: string;
-  labels?: { intro?: string | string[]; sections?: Partial<Record<"remove" | "change" | "on" | "decision" | "general" | "generalOnly", string>> };
+  labels?: { intro?: string | string[]; sections?: Partial<Record<"remove" | "change" | "on" | "decision" | "general" | "generalOnly", Text>> };
 }
 
 export type Motion = import("gpui-shell").TransitionPolicy;
