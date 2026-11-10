@@ -1263,6 +1263,8 @@ export default class Review extends View {
       .text_size(this.sz(10)).font_semibold().child(icon(KINDS[type].icon, 11)).child(KINDS[type].label.toUpperCase());
   }
 
+  /** One annotation as a card. @param {import("./types").Annotation} a @param {import("./types").Theme} t
+ *  @returns {import("gpui-kit").Element} */
   renderNote(a, t) {
     const color = this.color(a.type, t);
     const open = this.status === "open";
@@ -1292,6 +1294,7 @@ export default class Review extends View {
         .text_color(a.type === "replace" ? t.dim : t.foreground).child(text)));
   }
 
+  /** The open note editor (this.editing). @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderEditor(t) {
     const e = this.editing;
     const color = this.color(e.type, t);
@@ -1316,8 +1319,11 @@ export default class Review extends View {
           color: e.type === "delete" ? t.blocked : t.solid, kbd: "⌘↵", onClick: (cx) => this.saveEdit(cx) })));
   }
 
+  /** The annotations sidebar: tabs, per-type stats, and the notes list or the markdown preview.
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderSide(t) {
     const list = ordered(this.anns);
+    /** One sidebar tab. @param {string} id @param {string} label @param {number} count @returns {import("gpui-kit").Element} */
     const tab = (id, label, count) => h_flex().id(`pr-tab-${id}`).flex_1().h(26).gap(6).justify_center().items_center().rounded(6)
       .text_size(this.sz(12)).font_medium().cursor_pointer().text_color(this.sideTab === id ? t.foreground : t.muted)
       .when(this.sideTab === id, (el) => el.bg(t.background).shadow_sm())
@@ -1326,6 +1332,7 @@ export default class Review extends View {
       .child(label)
       .when(!!count, (el) => el.child(div().h(16).px(5).rounded(8).flex().items_center().text_size(this.sz(10)).font_semibold()
         .bg(tint(t.accent, "26")).text_color(t.accent).child(String(count))));
+    /** One per-type stat tile. @param {"comment" | "delete" | "replace" | "general"} k @returns {import("gpui-kit").Element} */
     const stat = (k) => {
       const c = this.color(k, t);
       const n = this.anns.filter((a) => a.type === k).length;
@@ -1347,6 +1354,8 @@ export default class Review extends View {
         .child(this.sideTab === "preview" ? this.renderPreview(t) : this.renderList(list, t)));
   }
 
+  /** The notes list (the sidebar's "Annotations" tab). @param {import("./types").Annotation[]} list
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderList(list, t) {
     const open = this.status === "open";
     if (!list.length) {
@@ -1386,6 +1395,8 @@ export default class Review extends View {
     }));
   }
 
+  /** The sidebar's "Preview" tab: the markdown the agent receives.
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderPreview(t) {
     const md = this.feedback;
     if (!md) {
