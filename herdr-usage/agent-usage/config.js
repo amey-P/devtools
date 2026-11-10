@@ -6,14 +6,20 @@
 // out the enabled services here and passes them as `scan.mjs --services a,b`.
 // No imports: file access comes in through `io`, so a node test can stub it.
 
+/** @import {ConfigIO, ParsedRaw, RawConfig, ScanSettings, Service, ServiceSettings, UsageConfig} from "./types" */
+
+/** @type {ScanSettings & Record<string, number>} */
 export const SCAN_DEFAULTS = { everyMinutes: 1, limitsEveryMinutes: 5 };
 // limitsEveryMinutes ≥ 5: plan limits come from rate-limited server APIs (Claude, OpenCode Go).
+/** @type {Record<keyof ScanSettings, [number, number]> & Record<string, [number, number]>} */
 export const RANGES = { everyMinutes: [1, 60], limitsEveryMinutes: [5, 60] };
+
 // What a services.<key> override may set; everything else about a service is services.json's.
 export const SERVICE_FIELDS = ["enabled", "hidden"];
 export const SCHEMA_REF = "../../mods/agent-usage/config.schema.json";
 
 // Used when services.json can't be read (keep in step with it).
+/** @type {Service[]} */
 export const DEFAULT_SERVICES = [
   { key: "claude", label: "Claude", icon: "icons/claude.svg", brand: "#d97757", enabled: true, program: "claude", apps: ["claude"] },
   { key: "codex", label: "Codex", icon: "icons/codex.svg", brand: "#7c8cf8", enabled: true, program: "codex", apps: ["codex"] },
@@ -21,14 +27,22 @@ export const DEFAULT_SERVICES = [
   { key: "opencode-go", label: "Go", icon: "mods/agent-usage/icons/opencode.svg", brand: "#a78bfa", enabled: true, program: "opencode", apps: ["opencode"], api: true },
 ];
 
+/** @param {unknown} v @returns {boolean} */
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+/** @param {unknown} v @returns {v is number} */
 const isInt = (v) => typeof v === "number" && Number.isInteger(v);
+/** @param {number} n @param {[number, number]} range */
 const clamp = (n, [lo, hi]) => Math.min(hi, Math.max(lo, n));
 
+/** @param {string} appHome @returns {string} */
 export const configDir = (appHome) => `${appHome}/data/agent-usage`;
+/** @param {string} appHome @returns {string} */
 export const configPath = (appHome) => `${configDir(appHome)}/config.json`;
 
-/** Lenient parse of config.json text: { value } ({} when absent/blank) or { error }. */
+/** Lenient parse of config.json text: { value } ({} when absent/blank) or { error }.
+ *  @param {string | null} text
+ *  @returns {ParsedRaw}
+ */
 export function parseRaw(text) {
   if (text == null || String(text).trim() === "") return { value: {} };
   try {
@@ -37,7 +51,10 @@ export function parseRaw(text) {
   } catch (e) { return { error: String(e?.message || e) }; }
 }
 
-/** services.json text → its service list (DEFAULT_SERVICES when unreadable). */
+/** services.json text → its service list (DEFAULT_SERVICES when unreadable).
+ *  @param {string | null} text
+ *  @returns {Service[]}
+ */
 export function parseServices(text) {
   try {
     const list = JSON.parse(text ?? "null")?.services;
@@ -49,43 +66,70 @@ export function parseServices(text) {
   return DEFAULT_SERVICES;
 }
 
-/** The scan cadence from a raw config: whole minutes in range, anything else → the default. */
+/** The scan cadence from a raw config: whole minutes in range, anything else → the default.
+ *  @param {RawConfig} [raw]
+ *  @returns {ScanSettings}
+ */
 export function scanOf(raw) {
+  /** @type {Record<string, number>} */
   const scan = {};
   for (const [k, range] of Object.entries(RANGES)) {
     const v = raw?.scan?.[k];
     scan[k] = isInt(v) ? clamp(v, range) : SCAN_DEFAULTS[k];
   }
-  return scan;
+  return /** @type {ScanSettings & Record<string, number>} */ (scan);
 }
 
-/** A service's defaults (its services.json entry, before the person's overrides). */
+/** A service's defaults (its services.json entry, before the person's overrides); anything that
+ *  carries `enabled` works, and callers like defaultAt() can pass a miss from find() (undefined).
+ *  @param {{ enabled?: boolean }} [svc]
+ *  @returns {ServiceSettings & Record<string, boolean>}
+ */
 export const serviceDefaults = (svc) => ({ enabled: svc?.enabled !== false, hidden: false });
 
-/** { enabled, hidden } for a service: a boolean override wins, anything else is the default. */
+/** { enabled, hidden } for a service: a boolean override wins, anything else is the default. The
+ *  body only reads `key` and `enabled`, so main.js can pass its scan-meta fallback objects too.
+ *  @param {{ key: string, enabled?: boolean }} svc
+ *  @param {RawConfig} [raw]
+ *  @returns {ServiceSettings}
+ */
 export function serviceOf(svc, raw) {
   const def = serviceDefaults(svc);
   const over = raw?.services?.[svc.key];
+  /** @type {Record<string, boolean>} */
   const out = {};
   for (const f of SERVICE_FIELDS) out[f] = typeof over?.[f] === "boolean" ? over[f] : def[f];
-  return out;
+  return /** @type {ServiceSettings & Record<string, boolean>} */ (out);
 }
 
-/** Everything the widget and the settings page read: { scan, services: { key: {enabled, hidden} } }. */
+/** Everything the widget and the settings page read: { scan, services: { key: {enabled, hidden} } }.
+ *  @param {Service[]} services
+ *  @param {RawConfig} raw
+ *  @returns {UsageConfig}
+ */
 export function effective(services, raw) {
+  /** @type {UsageConfig} */
   const out = { scan: scanOf(raw), services: {} };
   for (const svc of services) out.services[svc.key] = serviceOf(svc, raw);
   return out;
 }
 
-/** The default at `path` ("scan.everyMinutes", "services.<key>.hidden"). */
+/** The default at `path` ("scan.everyMinutes", "services.<key>.hidden").
+ *  @param {Service[]} services
+ *  @param {string} path
+ *  @returns {number | boolean}
+ */
 export function defaultAt(services, path) {
   const [head, key, field] = path.split(".");
   if (head === "scan") return SCAN_DEFAULTS[key];
   return serviceDefaults(services.find((s) => s.key === key))[field];
 }
 
-/** Why `value` can't be the setting at `path` — null when it can. */
+/** Why `value` can't be the setting at `path` — null when it can.
+ *  @param {string} path
+ *  @param {number | boolean} value
+ *  @returns {string | null}
+ */
 export function problem(path, value) {
   const parts = path.split(".");
   if (parts[0] === "scan" && parts.length === 2) {
@@ -100,22 +144,34 @@ export function problem(path, value) {
   return `unknown setting "${path}"`;
 }
 
-/** Paths whose value differs between two effective configs. */
+/** Paths whose value differs between two effective configs.
+ *  @param {UsageConfig} a
+ *  @param {UsageConfig} b
+ *  @returns {string[]}
+ */
 export function changedPaths(a, b) {
+  /** @type {string[]} */
   const out = [];
-  for (const k of Object.keys(RANGES)) if (a.scan[k] !== b.scan[k]) out.push(`scan.${k}`);
+  for (const k of /** @type {(keyof ScanSettings)[]} */ (Object.keys(RANGES))) if (a.scan[k] !== b.scan[k]) out.push(`scan.${k}`);
   for (const key of new Set([...Object.keys(a.services), ...Object.keys(b.services)]))
-    for (const f of SERVICE_FIELDS)
+    for (const f of /** @type {("enabled" | "hidden")[]} */ (SERVICE_FIELDS))
       if (a.services[key]?.[f] !== b.services[key]?.[f]) out.push(`services.${key}.${f}`);
   return out;
 }
 
 /** Writes `value` at `path` into a raw config object, dropping it (and emptied parents) when it is
- *  the default, so the file keeps holding only differences. Unknown keys are left alone. */
+ *  the default, so the file keeps holding only differences. Unknown keys are left alone.
+ *  @param {RawConfig} raw
+ *  @param {Service[]} services
+ *  @param {string} path
+ *  @param {number | boolean} value
+ *  @returns {RawConfig}
+ */
 export function setAt(raw, services, path, value) {
   const parts = path.split(".");
   const isDefault = value === defaultAt(services, path);
   let node = raw;
+  /** @type {[RawConfig, string][]} */
   const chain = [];
   for (const p of parts.slice(0, -1)) {
     if (!isObj(node[p])) { if (isDefault) return raw; node[p] = {}; }
@@ -137,6 +193,11 @@ export function setAt(raw, services, path, value) {
  * text just read (Herdr's writeTextFile replaces atomically and rejects a stale snapshot) — retried
  * once if another writer got in between. Returns the raw object written.
  *   io: { readTextFile, writeTextFile, mkdir }  (herdr / fs/promises in the mod; stubs in a test)
+ *  @param {string} file
+ *  @param {string} dir
+ *  @param {(raw: RawConfig) => void} mutate
+ *  @param {ConfigIO} io
+ *  @returns {Promise<RawConfig>}
  */
 export async function updateConfig(file, dir, mutate, io) {
   await io.mkdir(dir, { recursive: true });
