@@ -198,6 +198,7 @@ export default class SpaceTree extends View {
         .when(extra > 0, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(`+${extra}`))));
   }
 
+  /** @param {SpaceInfo} s @param {Theme} t @param {Map<string, AgentInfo[]>} byTab @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   space(s, t, byTab, allPanes) {
     const expanded = s.active || Boolean(this.open[s.id]);
     const header = this.spaceMouse(h_flex()
@@ -225,6 +226,7 @@ export default class SpaceTree extends View {
   }
 
   // Rail: one tab as a pill of its agents' dots (a hollow ring when it has none).
+  /** @param {SpaceInfo} s @param {TabInfo} c @param {AgentInfo[]} list @param {Theme} t @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   tabCluster(s, c, list, t, allPanes) {
     const selected = c.active;
     const shown = list.slice(0, PILL_DOTS);
@@ -252,6 +254,7 @@ export default class SpaceTree extends View {
   }
 
   // Rail hover on a space: its name and where it lives, then every tab (clickable).
+  /** @param {SpaceInfo} s @param {Theme} t @param {Map<string, AgentInfo[]>} byTab @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   spaceCard(s, t, byTab, allPanes) {
     const where = [s.branch, s.machine].filter(Boolean).join(" · ");
     return v_flex().w(220).p(8).gap(6).rounded(10).bg(t.popover).border_1().border_color(t.border)
@@ -279,6 +282,7 @@ export default class SpaceTree extends View {
   }
 
   // Rail hover: the tab's agents, then its name. Clicks work as in the tree.
+  /** @param {SpaceInfo} s @param {TabInfo} c @param {AgentInfo[]} list @param {Theme} t @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   tabCard(s, c, list, t, allPanes) {
     const label = this.tabLabel(c, allPanes);
     return v_flex().w(220).p(8).gap(6).rounded(8).bg(t.popover).border_1().border_color(t.border).text_size(12.5)
@@ -295,10 +299,11 @@ export default class SpaceTree extends View {
   // Rail: the shown space is a tile over its constellation of tab pills; the rest
   // are bare glyphs with a status badge. Ids stay put across states so the tile,
   // row and accent bar spring between them.
+  /** @param {SpaceInfo} s @param {Theme} t @param {Map<string, AgentInfo[]>} byTab @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   rail(s, t, byTab, allPanes) {
     const on = s.active;
     const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = color.startsWith("#") ? color : (t[color] ?? t.accent);
+    const ink = color.startsWith("#") ? /** @type {import("gpui-kit").Color} */ (color) : (t[color] ?? t.accent);
     const rowH = on ? TILE + 8 : RAIL_ROW;
     const box = on ? TILE : GLYPH_BOX;
     const badge = !on && Boolean(s.status) && s.status !== "idle";
@@ -354,6 +359,7 @@ export default class SpaceTree extends View {
     const allAgents = agents();
     const allPanes = panes();
 
+    /** @type {Map<string, AgentInfo[]>} */
     const byTab = new Map();
     for (const a of allAgents) {
       if (!byTab.has(a.tab)) byTab.set(a.tab, []);
