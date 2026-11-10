@@ -29,6 +29,19 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE, describeConfig, ensureConfigFile, loadConfig, resolvePath, setConfig } from "./mod/bin/config.mjs";
 
+/** @import { RawTree } from "./mod/types.js" */
+
+/** `status` line for one target. `current`/`stale` only exist when it's installed. */
+/** @typedef {{ installed: boolean, current?: boolean, stale?: boolean, line: string }} Status */
+/** An entry of @see MODS, or the bundle piped into modInstall. */
+/** @typedef {{ name: string, src: string, dest: string }} ModInfo */
+/** `claude plugin list --json` entry. */
+/** @typedef {{ id: string, version: string, installPath: string, enabled: boolean }} ClaudePlugin */
+/** `claude plugin marketplace list --json` entry. */
+/** @typedef {{ name: string, path: string }} ClaudeMarket */
+/** A pi settings entry: the raw setting and where it resolves to. */
+/** @typedef {{ raw: string, abs: string }} PiEntry */
+
 const REPO = dirname(fileURLToPath(import.meta.url));
 const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
 const MOD_NAME = "review";
@@ -55,19 +68,28 @@ const MANIFESTS = [
 ];
 const TARGETS = ["herdr", "claude", "pi"];
 
+/** @type {Record<"ok" | "warn" | "err" | "dim", (s: string) => string>} */
 const c = process.stdout.isTTY
   ? { ok: (s) => `\x1b[32m${s}\x1b[0m`, warn: (s) => `\x1b[33m${s}\x1b[0m`, err: (s) => `\x1b[31m${s}\x1b[0m`, dim: (s) => `\x1b[2m${s}\x1b[0m` }
   : { ok: (s) => s, warn: (s) => s, err: (s) => s, dim: (s) => s };
+/** @type {(...a: unknown[]) => void} */
 const log = (...a) => console.log(...a);
+/** @type {(msg: string) => never} */
 const die = (msg) => { console.error(c.err(`error: ${msg}`)); process.exit(1); };
 
+/** A JSON file as raw JSON.parse output (null if unreadable or unparsable). */
+/** @type {(p: string) => any} */
 const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
+/** @type {(p: string, v: unknown) => void} */
 const writeJson = (p, v) => writeFileSync(p, JSON.stringify(v, null, 2) + "\n");
+/** @type {() => string} */
 const version = () => readJson(join(REPO, "package.json")).version;
 
+/** @param {string} cmd @param {string[]} args
+ *  @param {{ quiet?: boolean, allowFail?: boolean }} [opts] @returns {{ ok: boolean, stdout: string, stderr: string, missing?: boolean }} */
 function sh(cmd, args, { quiet = false, allowFail = false } = {}) {
   const r = spawnSync(cmd, args, { encoding: "utf8" });
-  if (r.error?.code === "ENOENT") {
+  if (/** @type {NodeJS.ErrnoException} */ (r.error)?.code === "ENOENT") {
     if (allowFail) return { ok: false, missing: true, stdout: "", stderr: `${cmd} not found` };
     die(`${cmd} not found on PATH`);
   }
@@ -76,11 +98,14 @@ function sh(cmd, args, { quiet = false, allowFail = false } = {}) {
   if (!ok && !allowFail) die(`${cmd} ${args.join(" ")} failed:\n${(r.stderr || r.stdout || "").trim()}`);
   return { ok, stdout: r.stdout || "", stderr: r.stderr || "" };
 }
-const has = (cmd) => spawnSync(cmd, ["--version"], { encoding: "utf8" }).error?.code !== "ENOENT";
+/** @type {(cmd: string) => boolean} */
+const has = (cmd) => /** @type {NodeJS.ErrnoException | undefined} */ (spawnSync(cmd, ["--version"], { encoding: "utf8" }).error)?.code !== "ENOENT";
 
-/** Relative paths of every file under dir, skipping `skip(name)`. */
+/** Relative paths of every file under dir, skipping `skip(name)`.  @param {string} dir
+ *  @param {(name: string) => boolean} [skip] @param {string} [base] @returns {string[]} */
 function walk(dir, skip = () => false, base = dir) {
   if (!existsSync(dir)) return [];
+  /** @type {string[]} */
   const out = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (skip(e.name) || e.name === ".DS_Store") continue;
@@ -90,17 +115,22 @@ function walk(dir, skip = () => false, base = dir) {
   }
   return out.sort();
 }
+/** @type {(p: string) => string} */
 const fileHash = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+/** @param {string} dir @param {(name: string) => boolean} [skip] @returns {string} */
 function treeHash(dir, skip) {
   const h = createHash("sha256");
   for (const f of walk(dir, skip)) h.update(f).update("\0").update(fileHash(join(dir, f))).update("\0");
   return h.digest("hex");
 }
+/** @type {(name: string) => boolean} */
 const skipHerdr = (name) => HERDR_OWNED.has(name);
+/** @type {(p: string) => boolean} */
 const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 
 // ---------------------------------------------------------------- herdr
 
+/** @param {ModInfo} mod @returns {Status} */
 function modStatus({ name, src, dest }) {
   if (!existsSync(dest) && !isLink(dest)) return { installed: false, line: `${name}: not installed` };
   if (isLink(dest)) {
@@ -114,17 +144,20 @@ function modStatus({ name, src, dest }) {
   return { installed: true, current, line: `${name}: copy ${v}${current ? "" : ", differs from repo"}` };
 }
 
+/** @returns {Status} */
 function herdrStatus() {
   const all = MODS.map(modStatus);
   const keys = inboxKeyBound() ? "" : "; ctrl-shift-i not bound";
   return { installed: all.every((s) => s.installed), current: all.every((s) => s.current), line: all.map((s) => s.line).join("; ") + keys };
 }
 
+/** @param {{ link?: boolean }} opts @returns {void} */
 function herdrInstall({ link }) {
   for (const m of MODS) modInstall(m, { link });
   migrateKeys();
 }
 
+/** @param {ModInfo} mod @param {{ link?: boolean }} opts @returns {void} */
 function modInstall({ src: MOD_SRC, dest: MOD_DEST }, { link }) {
   mkdirSync(dirname(MOD_DEST), { recursive: true });
   if (link) {
@@ -173,10 +206,12 @@ function inboxKeyBound() {
   const k = readJson(KEYS_FILE)?.global?.[INBOX_KEY];
   return k?.command === "mod.open" && k?.args?.name === "review-inbox";
 }
+/** @returns {void} */
 function migrateKeys() {
   if (!existsSync(KEYS_FILE)) return;
   const text = readFileSync(KEYS_FILE, "utf8");
   let next = text;
+  /** @type {string[]} */
   const did = [];
   if (OLD_REPLY_BINDING.test(next)) {
     next = next.replace(OLD_REPLY_BINDING, '{ "command": "mod.open", "args": { "name": "review" } }');
@@ -199,9 +234,11 @@ function migrateKeys() {
   log(`  keys.json: ${did.join("; ")} (backup: keys.json.bak-review)`);
 }
 
+/** @returns {void} */
 function showConfig() {
   log(`${c.dim(CONFIG_FILE)}  ${c.dim("(or ⚙ Settings in a review)")}`);
   const rows = describeConfig();
+  /** @type {(p: string) => string} */
   const sub = (p) => p.slice(p.indexOf(".") + 1);
   const w = Math.max(...rows.map((r) => sub(r.path).length));
   let group = null;
@@ -227,16 +264,21 @@ function herdrUninstall() {
 
 // ---------------------------------------------------------------- claude
 
+/** @returns {{ plugin?: ClaudePlugin, market?: ClaudeMarket }} */
 function claudeState() {
+  /** @type {ClaudePlugin[]} */
   const plugins = JSON.parse(sh("claude", ["plugin", "list", "--json"], { quiet: true }).stdout || "[]");
+  /** @type {ClaudeMarket[]} */
   const markets = JSON.parse(sh("claude", ["plugin", "marketplace", "list", "--json"], { quiet: true }).stdout || "[]");
   return { plugin: plugins.find((p) => p.id === PLUGIN_ID), market: markets.find((m) => m.name === MARKETPLACE) };
 }
 
+/** @returns {Status} */
 function claudeStatus() {
   if (!has("claude")) return { installed: false, line: "claude not on PATH" };
   const { plugin, market } = claudeState();
   if (!market) return { installed: false, line: "marketplace not added" };
+  /** @type {string[]} */
   const parts = [];
   const marketOk = market.path === REPO;
   if (!marketOk) parts.push(`marketplace points at ${market.path}`);
@@ -250,6 +292,7 @@ function claudeStatus() {
   return { installed: true, current, stale, line: parts.join("; ") };
 }
 
+/** @param {{ force?: boolean }} opts @returns {void} */
 function claudeInstall({ force }) {
   if (!has("claude")) { log(c.warn("  claude not on PATH; skipped")); return; }
   let { plugin, market } = claudeState();
@@ -277,6 +320,7 @@ function claudeInstall({ force }) {
   log(`  ${c.ok(`${PLUGIN_ID} ${version()}`)} (restart Claude sessions to load hook changes)`);
 }
 
+/** @returns {void} */
 function claudeUninstall() {
   if (!has("claude")) return;
   const { plugin, market } = claudeState();
@@ -287,8 +331,10 @@ function claudeUninstall() {
 
 // ---------------------------------------------------------------- pi
 
-/** pi settings entries that are this package (this repo, or the old in-mod location). */
+/** pi settings entries that are this package (this repo, or the old in-mod location).
+ *  @returns {PiEntry[]} */
 function piEntries() {
+  /** @type {{ packages?: string[] }} */
   const s = readJson(PI_SETTINGS);
   const base = dirname(PI_SETTINGS);
   return (s?.packages ?? []).filter((p) => {
@@ -299,6 +345,7 @@ function piEntries() {
   }).map((p) => ({ raw: p, abs: resolve(base, p.replace(/^~(?=\/)/, homedir())) }));
 }
 
+/** @returns {Status} */
 function piStatus() {
   if (!existsSync(PI_SETTINGS)) return { installed: false, line: `no ${PI_SETTINGS}` };
   const entries = piEntries();
@@ -309,15 +356,18 @@ function piStatus() {
 
 /** Remove matching entries from pi's settings directly: `pi remove` resolves relative
  *  paths against the cwd and can't match an entry whose folder is gone. */
+/** @param {(e: PiEntry) => boolean} pred @returns {void} */
 function dropPiEntries(pred) {
   const drop = new Set(piEntries().filter(pred).map((e) => e.raw));
   if (!drop.size) return;
+  /** @type {{ packages?: string[] }} */
   const s = readJson(PI_SETTINGS);
   s.packages = s.packages.filter((p) => !drop.has(p));
   writeJson(PI_SETTINGS, s);
   for (const raw of drop) log(`  removed pi entry ${raw}`);
 }
 
+/** @returns {void} */
 function piInstall() {
   if (!has("pi")) { log(c.warn("  pi not on PATH; skipped")); return; }
   dropPiEntries((e) => e.abs !== PI_SRC);
@@ -325,6 +375,7 @@ function piInstall() {
   log(`  ${c.ok(`pi loads ${PI_SRC}`)} (restart pi sessions to reload)`);
 }
 
+/** @returns {void} */
 function piUninstall() {
   if (!has("pi")) return;
   dropPiEntries(() => true);
@@ -333,6 +384,7 @@ function piUninstall() {
 
 // ---------------------------------------------------------------- versions
 
+/** @param {string} v @returns {void} */
 function setVersion(v) {
   if (!/^\d+\.\d+\.\d+$/.test(v)) die(`not a version: ${v}`);
   for (const f of MANIFESTS) {
@@ -346,9 +398,10 @@ function setVersion(v) {
   log(`version ${v} written to ${MANIFESTS.length + 1} manifests`);
 }
 
+/** @param {string} kind @returns {void} */
 function bump(kind) {
   const [a, b, p] = version().split(".").map(Number);
-  const next = { major: `${a + 1}.0.0`, minor: `${a}.${b + 1}.0`, patch: `${a}.${b}.${p + 1}` }[kind];
+  const next = /** @type {Record<string, string | undefined>} */ ({ major: `${a + 1}.0.0`, minor: `${a}.${b + 1}.0`, patch: `${a}.${b}.${p + 1}` })[kind];
   if (!next) die("bump patch|minor|major");
   setVersion(next);
 }
@@ -360,6 +413,7 @@ const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const [cmd, arg] = argv.filter((a) => !a.startsWith("--"));
 const targets = !arg || arg === "all" ? TARGETS : TARGETS.includes(arg) ? [arg] : null;
 const opts = { link: flags.has("--link"), force: flags.has("--force") };
+/** @type {Record<string, { status: () => Status, install: () => void, uninstall: () => void }>} */
 const impl = {
   herdr: { status: herdrStatus, install: () => herdrInstall(opts), uninstall: herdrUninstall },
   claude: { status: claudeStatus, install: () => claudeInstall(opts), uninstall: claudeUninstall },
@@ -414,7 +468,9 @@ switch (cmd) {
       else if (key && value !== undefined) setConfig(key, value);
       else if (key) {
         const path = resolvePath(key);
-        const v = path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), loadConfig());
+        // An arbitrary node of the config file (its raw JSON), walked by the dotted key.
+        /** @type {any} */
+        const v = path.split(".").reduce((o, k) => (o && typeof o === "object" ? /** @type {RawTree} */ (o)[k] : undefined), loadConfig());
         if (v === undefined) die(`unknown setting "${key}"`);
         log(typeof v === "object" ? JSON.stringify(v, null, 2) : Array.isArray(v) ? v.join("\n") : String(v));
         break;
