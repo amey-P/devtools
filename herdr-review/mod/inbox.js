@@ -16,8 +16,13 @@ import {
 } from "./ui.js";
 import { SETTINGS_WINDOW } from "./settings.js";
 
+/** @import { ReviewRecord, ReviewState, ReviewRequest, Theme } from "./types"
+ *  @import { Color, Element, Context, AsyncContext, KeyEvent } from "gpui-kit" */
+
 const WEEK = 7 * 86400e3;
 const FILTERS = [["all", "All"], ["plan", "Plans"], ["ask", "Asks"], ["choice", "Decisions"]];
+/** What each state shows: a label, the color of its bar and dot, pulsing while an agent waits. */
+/** @type {Record<ReviewState, { label: string; color: (t: Theme) => Color; pulse?: boolean }>} */
 const STATE = {
   pending: { label: "Waiting for you", color: (t) => t.blocked, pulse: true },
   draft: { label: "Unsent notes", color: (t) => t.accent },
@@ -33,9 +38,12 @@ const STATE = {
 };
 
 export class Inbox {
+  /** `overlay`: this floating window's id (closes it), null when shown inside a review. `cx`: the inbox view's init context.
+   *  @param {string | null} overlay @param {AsyncContext} cx */
   constructor(overlay, cx) {
     this.overlay = overlay;
     this.h = cx.focus_handle();
+    /** @type {ReviewRecord[]} */
     this.items = [];
     this.loaded = false;
     this.filter = "all";
@@ -71,6 +79,7 @@ export class Inbox {
   }
 
   async load() {
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(spool())).filter(isReviewId); } catch {}
     const all = (await Promise.all(ids.map(readReview))).filter(Boolean);
@@ -81,6 +90,7 @@ export class Inbox {
       if (r.state === "pending" && !r.live) { r.state = "orphaned"; r.needsYou = false; }
     }
     // Versions: show the newest, count the rest.
+    /** @type {Map<string, ReviewRecord[]>} */
     const groups = new Map();
     for (const r of all) {
       const k = groupKey(r.req);
@@ -112,6 +122,7 @@ export class Inbox {
 
   // ---- actions ---------------------------------------------------------------
 
+  /** @param {ReviewRecord} r */
   async open(r) {
     // Already showing as a split or tab beside its agent: go there.
     const meta = await readJson(`${r.dir}/meta.json`);
@@ -119,12 +130,14 @@ export class Inbox {
     await openReviewWindow(r.id, r.req, this.cfg ?? (await readConfig()));
   }
 
+  /** @param {ReviewRecord} r @param {Context} cx */
   async dismiss(r, cx) {
     await fs.writeFile(`${r.dir}/decision.json`, JSON.stringify({ decision: "dismissed", at: Date.now() })).catch(() => {});
     await this.load();
     cx.notify();
   }
 
+  /** @param {ReviewRecord} r @param {Context} cx */
   async discard(r, cx) {
     // Every version of it.
     const k = groupKey(r.req);
@@ -140,6 +153,7 @@ export class Inbox {
     cx.notify();
   }
 
+  /** @param {KeyEvent} e @param {Context} cx */
   onKey(e, cx) {
     const k = e.keystroke;
     const list = this.visible;
@@ -155,6 +169,7 @@ export class Inbox {
 
   // ---- view ------------------------------------------------------------------
 
+  /** @param {Context} cx @returns {Element} */
   render(cx) {
     const t = theme();
     const list = this.visible;
@@ -163,10 +178,12 @@ export class Inbox {
     const root = withFont(v_flex(), this.cfg).id("inbox").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
       .on_mouse_down("left", () => this.h.focus());
+    /** @param {string} label @param {number} n @param {Color} color @returns {Element} */
     const section = (label, n, color) => h_flex().px(16).pt(14).pb(6).gap(8).items_center()
       .child(div().text_size(10.5).font_semibold().text_color(color).child(label))
       .child(div().h(16).px(5).rounded(8).flex().items_center().text_size(10).font_semibold().bg(tint(color, "22")).text_color(color).child(String(n)));
     let idx = 0;
+    /** @param {ReviewRecord[]} rs @returns {Element[]} */
     const rows = (rs) => rs.map((r) => this.renderRow(r, idx++, t));
     return root
       .child(this.renderHeader(t))
@@ -183,9 +200,11 @@ export class Inbox {
         .child(div().h(12)));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderHeader(t) {
     const waiting = this.items.filter((r) => r.state === "pending").length;
     const color = waiting ? t.blocked : t.accent;
+    /** @param {string} f @param {string} label @returns {Element} */
     const chip = (f, label) => {
       const n = f === "all" ? this.items.length : this.items.filter((r) => (r.req.kind ?? "plan") === f).length;
       const on = this.filter === f;
@@ -215,6 +234,7 @@ export class Inbox {
         .child(div().text_size(10.5).text_color(t.dim).child("↑↓ select · ↵ open · tab filter")));
   }
 
+  /** @param {ReviewRecord} r @param {number} i @param {Theme} t @returns {Element} */
   renderRow(r, i, t) {
     const st = STATE[r.state] ?? STATE.interrupted;
     const c = st.color(t);
@@ -225,13 +245,14 @@ export class Inbox {
     const who = p?.name ?? AGENT_NAMES[req.agent] ?? AGENT_NAMES[req.parent?.app] ?? "Agent";
     const where = [live?.space_name ?? req.parent?.space_name, live?.tab_name ?? req.parent?.tab_name].filter(Boolean).join(" › ");
     const ic = p?.icon
-      ? (p.tint ? svg(p.icon).size(16).flex_none().text_color(p.color ?? t.foreground) : image(p.icon).w(16).h(16).flex_none())
+      ? (p.tint ? svg(p.icon).size(16).flex_none().text_color(/** @type {Color} */ (p.color ?? t.foreground)) : image(p.icon).w(16).h(16).flex_none())
       : div().w(16).h(16).rounded(4).bg(tint(t.accent, "55")).flex_none();
     const kind = req.kind === "plan" ? "PLAN" : req.kind === "choice" ? "DECISION" : req.mode === "send" ? "DOC" : "ASK";
     const deferred = r.seen?.deferred_at && r.needsYou;
     const fresh = r.needsYou && !r.seen?.opened_at;
     const time = r.needsYou ? `${r.state === "pending" ? "waiting " : ""}${ago(req.created)}` : ago(r.at);
     const meta = [who, where, time].filter(Boolean);
+    /** @param {string} s @returns {Element} */
     const sub = (s) => div().flex_none().child(s);
     return h_flex().id(`inbox-r-${r.id}`).relative().mx(10).mb(6).pl(14).pr(8).py(9).gap(10).items_center().rounded(10)
       .bg(sel ? t.selected : t.background).border_1().border_color(sel ? tint(t.accent, "88") : t.border)
@@ -264,5 +285,6 @@ export class Inbox {
   }
 }
 
-/** Requests of one agent and kind (and session, when it has one) are versions of each other. */
+/** Requests of one agent and kind (and session, when it has one) are versions of each other.
+ *  @param {ReviewRequest} req @returns {string} */
 const groupKey = (req) => `${req.terminal}|${req.kind ?? "plan"}|${req.session ?? ""}`;
