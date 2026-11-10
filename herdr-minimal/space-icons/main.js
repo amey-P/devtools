@@ -7,10 +7,17 @@ import { v_flex, h_flex } from "gpui-base";
 import { spaces, run, openOverlay, theme, window, appHome, readTextFile } from "herdr";
 import { iconFor, alpha } from "./glyphs.js";
 
+/** @import { Theme } from "./types" */
+/** @import { SpaceInfo } from "herdr" */
+
 const CELL = 34;
 const LOUD = new Set(["blocked", "done", "working"]);
 
 export default class SpaceIcons extends View {
+  /**
+   * @param {import("gpui-shell").Props | undefined} _props
+   * @param {import("gpui-kit").AsyncContext} cx
+   */
   init(_props, cx) {
     this.overrides = {};
     cx.spawn(async (cx) => {
@@ -27,9 +34,14 @@ export default class SpaceIcons extends View {
     });
   }
 
+  /**
+   * @param {SpaceInfo} s
+   * @param {Theme} t
+   * @returns {import("gpui-kit").Element}
+   */
   cell(s, t) {
     const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = color.startsWith("#") ? color : (t[color] ?? t.accent);
+    const ink = /** @type {import("gpui-kit").Color} */ (color.startsWith("#") ? color : (t[color] ?? t.accent));
     const loud = LOUD.has(s.status);
     return h_flex()
       .id(`space-${s.id}`)
