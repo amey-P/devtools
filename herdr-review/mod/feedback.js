@@ -3,11 +3,14 @@
 // A choice (a pick in a ```choice block, see blocks.js) also has {question, picked: [labels]}; its text is the picks joined.
 import { plain } from "./blocks.js";
 
+/** @param {string} s @param {number} [n] @returns {string} */
 const clip = (s, n = 70) => {
   const one = s.replace(/\s+/g, " ").trim();
   return one.length > n ? one.slice(0, n - 1) + "…" : one;
 };
+/** @param {string} s @returns {string} */
 const quoted = (s) => s.split("\n").map((l) => `> ${l}`).join("\n");
+/** @param {string} s @returns {string} */
 const fenced = (s) => {
   const ticks = /```/.test(s) ? "````" : "```";
   return `${ticks}\n${s}\n${ticks}`;
@@ -15,7 +18,7 @@ const fenced = (s) => {
 
 /**
  * Orders annotations as they appear in the plan, general ones last.
- * @param {import("./types").Annotation[]} anns
+ * @param {import("./types").Annotation[]} anns @returns {import("./types").Annotation[]}
  */
 export function ordered(anns) {
   return [...anns].sort((a, b) => (a.block ?? 1e9) - (b.block ?? 1e9) || a.created - b.created);
@@ -26,6 +29,7 @@ export const LABELS = {
   intro: "I've reviewed {subject} and have {count} of feedback:",
   sections: { remove: "Remove this", change: "Change this", on: "Feedback on: \"{quote}\"", decision: "Decision: \"{quote}\"", general: "General feedback", generalOnly: "Feedback" },
 };
+/** @param {import("./types").Text} v @param {Record<string, string>} vars @returns {string} */
 const fill = (v, vars) => (Array.isArray(v) ? v.join("\n") : String(v)).replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
 
 /**
