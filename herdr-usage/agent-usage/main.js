@@ -25,7 +25,11 @@ import {
 import { Settings } from "./settings.js";
 import * as cfg from "./config.js";
 
-/** @import {RawConfig, Theme} from "./types" */
+/** @import {LimitWindow, ProviderMeta, ProviderUsage, RawConfig, Theme, Totals} from "./types" */
+
+/** One `rows()` entry: the effective service (key/label/icon/brand/matchers from services.json or
+ *  the scan's meta, merged with the person's config) plus what scan.mjs reported for it. */
+/** @typedef {{ key: string, label: string, icon?: string | null, brand?: import("gpui-kit").Color | null, program?: string | null, apps?: string[], api: boolean, enabled: boolean, hidden: boolean, d: ProviderUsage | null, agents: import("herdr").AgentInfo[], windows: LimitWindow[], primary: LimitWindow | null, weekly: LimitWindow | null, status: import("herdr").Status | null }} Row */
 
 const BLOCK = "usage";            // the layout block this mod lives in
 const NARROW = 160;
@@ -213,7 +217,10 @@ export default class AgentUsage extends View {
     this.cfg = this.computeCfg();
   }
 
-  /** Writes config.json through config.updateConfig, then reloads. Errors show on the card. */
+  /** Writes config.json through config.updateConfig, then reloads. Errors show on the card.
+   *  @param {(raw: RawConfig) => void} mutate
+   *  @returns {Promise<boolean>}
+   */
   async writeConfig(mutate) {
     try {
       this.raw = await cfg.updateConfig(this.cfgPath, this.cfgDir, mutate, this.io);
@@ -244,7 +251,10 @@ export default class AgentUsage extends View {
     this.cfg = this.computeCfg();
   }
 
-  /** A service as the widget sees it: services.json entry (or the scan's meta) + the person's config. */
+  /** A service as the widget sees it: services.json entry (or the scan's meta) + the person's config.
+   *  @param {string} key
+   *  @param {ProviderMeta} [meta]
+   */
   effectiveService(key, meta) {
     const svc = this.services.find((s) => s.key === key) ?? { key, label: key, ...(meta ?? {}) };
     return { ...svc, label: svc.label ?? key, ...(this.cfg.services[key] ?? cfg.serviceOf(svc, {})) };
@@ -253,6 +263,12 @@ export default class AgentUsage extends View {
   /** Keys of the services to scan, in services.json order. */
   enabledKeys() { return this.services.filter((s) => this.cfg.services[s.key]?.enabled !== false).map((s) => s.key); }
 
+  /** Runs scan.mjs for the enabled services and stores the result: `data`, localStorage and the
+   *  shared "agent-usage.lastScan". `limits`: also fetch the plan-limit APIs. A request made while
+   *  a scan is running is remembered in `pending` and re-run when it ends.
+   *  @param {import("gpui-kit").AsyncContext} cx
+   *  @param {boolean} limits
+   */
   refresh(cx, limits) {
     if (this.busy) {
       // Asked for while a scan runs (a settings save, the ↻): run once more when it ends.
@@ -293,12 +309,17 @@ export default class AgentUsage extends View {
     this.settings?.dispose();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   togglePin(cx) {
     this.pinned = !this.pinned;
     try { localStorage.setItem("pinned", this.pinned ? "1" : "0"); } catch {}
     cx.notify();
   }
 
+  /** persistently hides a service from the strip (config.json services.<key>.hidden).
+   *  @param {string} key
+   *  @param {import("gpui-kit").Context} cx
+   */
   toggleHidden(key, cx) {
     const hidden = !this.effectiveService(key).hidden;
     cx.spawn(async (cx) => {
@@ -307,6 +328,7 @@ export default class AgentUsage extends View {
     });
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   showAll(cx) {
     cx.spawn(async (cx) => {
       const keys = this.hiddenKeys();
@@ -322,10 +344,16 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- model
 
+  /** One row per visible service: the effective service merged with everything scan.mjs reported
+   *  for it — the single thing the strip and the detail card draw from.
+   *  @returns {Row[]}
+   */
   rows() {
     const live = agents();
+    /** @type {Row[]} */
     const out = [];
     for (const [key, raw] of Object.entries(this.data?.providers ?? {})) {
+      /** @type {ProviderUsage | null} */
       const d = raw ?? null;
       // Effective service: scan meta (label/icon/brand/matchers) + the person's config.json overrides.
       const m = this.effectiveService(key, d?.meta);
@@ -334,7 +362,7 @@ export default class AgentUsage extends View {
       const used = (d?.week?.msgs ?? 0) > 0 || d?.limits?.state === "ok";
       if (!used && mine.length === 0) continue;
       const windows = d?.limits?.state === "ok" ? d.limits.windows ?? [] : [];
-      const status = mine.reduce((s, a) => ((URGENCY[a.status] ?? 0) > (URGENCY[s] ?? 0) ? a.status : s), null);
+      const status = mine.reduce(/** @type {(s: import("herdr").Status | null, a: import("herdr").AgentInfo) => import("herdr").Status | null} */ ((s, a) => ((URGENCY[a.status] ?? 0) > (URGENCY[s] ?? 0) ? a.status : s)), null);
       out.push({ ...m, api: !!m.api, d, agents: mine, windows, primary: windows[0] ?? null,
         weekly: windows.find((w) => w.label === "week") ?? null, status });
     }
@@ -343,18 +371,36 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- pieces
 
+  /** The service's square badge; dimmed when the row isn't live (`on=false`).
+   *  @param {Row} r
+   *  @param {number} size
+   *  @param {Theme} t
+   *  @param {boolean} [on]
+   *  @returns {import("gpui-kit").Element}
+   */
   glyph(r, size, t, on = true) {
     return h_flex().flex_none().size(size).rounded(Math.round(size * 0.3)).justify_center().items_center()
       .bg(alpha(r.brand, on ? 0.18 : 0.1)).text_color(r.brand)
       .child(svg(r.icon).size(Math.round(size * 0.62)));
   }
 
+  /** A status dot; working/blocked pulse.
+   *  @param {import("herdr").Status} status
+   *  @param {Theme} t
+   *  @param {number} [size]
+   *  @returns {import("gpui-kit").Element}
+   */
   statusDot(status, t, size = 6) {
     return div().flex_none().size(size).rounded(Math.ceil(size / 2)).bg(t[status] ?? t.unknown)
       .when(status === "working", (d) => d.loop("opacity", { from: 0.35, to: 1, period: 1400 }))
       .when(status === "blocked", (d) => d.loop("opacity", { from: 0.3, to: 1, period: 700 }));
   }
 
+  /** One live agent: a dot that opens its terminal, tinted per state.
+   *  @param {import("herdr").AgentInfo} a
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   agentDot(a, t) {
     return div().id(`ad-${a.address}`).flex_none().size(7).rounded(4).cursor_pointer()
       .when(a.status === "idle", (d) => d.border_1().border_color(t.idle))
@@ -366,9 +412,11 @@ export default class AgentUsage extends View {
   }
 
   // A thin limit bar; `ticks` mark the other windows (weekly, monthly) on the same track.
+  /** @param {string} id @param {number} pct @param {Theme} t @param {number} h @param {number[]} [ticks] @returns {import("gpui-kit").Element} */
   bar(id, pct, t, h, ticks = []) {
     const p = Math.max(0, Math.min(100, pct ?? 0));
     const color = level(p, t);
+    /** @param {number} x @param {number} i @returns {import("gpui-kit").Element} */
     const mark = (x, i) => div().id(`${id}-tick-${i}`).absolute().top(-1).h(h + 2).w(2).rounded(1)
       .left(`${Math.max(0, Math.min(98, x))}%`).bg(alpha(t.foreground, 0.45));
     return div().id(id).relative().flex_1().min_w(0).h(h).rounded(h).bg(alpha(t.foreground, 0.08))
@@ -381,6 +429,7 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- compact
 
+  /** @param {Row} r @param {Theme} t @returns {import("gpui-kit").Element} */
   compactRow(r, t) {
     const value = r.primary ? `${Math.round(r.primary.pct)}%` : r.api ? "—" : fmtCost(r.d?.today?.cost ?? 0);
     const valueColor = r.primary ? level(r.primary.pct, t) : t.muted;
@@ -395,6 +444,10 @@ export default class AgentUsage extends View {
       .child(div().flex_none().w(6).child(r.status && r.status !== "idle" ? this.statusDot(r.status, t) : div()));
   }
 
+  /** Sum of a Totals block's token directions; 0 without a block.
+   *  @param {Totals} [b]
+   *  @returns {number}
+   */
   total(b) { return b ? b.in + b.out + b.cw + b.cr : 0; }
 
   // ---------------------------------------------------------------- detail
