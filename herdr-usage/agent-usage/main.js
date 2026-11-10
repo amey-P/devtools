@@ -1,17 +1,29 @@
-// Agent usage: a small strip at the bottom of the sidebar. One row per coding
-// agent (Claude, Codex, pi): its icon, a thin bar of the plan limit in use
-// (5h window; a tick marks the weekly one), the percent (or today's cost when the
-// agent has no plan limit) and a live dot for its agents in Herdr.
+// Agent usage: a small strip at the bottom of the sidebar. One row per tracked
+// service (Claude, Codex, pi, OpenCode Go — see services.json): its icon, a thin
+// bar of the limit in use (5h window; ticks mark the other windows), the percent
+// (or today's cost when the service reports no limits) and a live dot for its
+// agents in Herdr. Each service can be hidden from the card's switch; enabled /
+// in-strip and the scan cadence are the settings screen (ctrl-shift-u, ⚙ in the
+// card). Both write <app home>/data/agent-usage/config.json through
+// config.updateConfig; this file reads it (config.js holds the rules) and tells
+// scan.mjs which services to scan (--services) — the scanner never reads it.
 // Hover opens a card with the detail; a click pins that detail open inline
 // (the block grows with `layout.resize`). Narrower than NARROW it draws as a
 // rail of tiles, each with a fill line and a status badge; hover for the card.
 //
-// Data comes from scan.mjs (Node), run every minute; plan limits every 5 minutes.
-// Colors follow the theme: bars go green → amber → red as a limit fills.
+// Data comes from scan.mjs (Node), run every `scan.everyMinutes`; limits every
+// `scan.limitsEveryMinutes`. Colors follow the theme: bars go green → amber →
+// red as a limit fills.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, HoverCard } from "gpui-base";
-import { agents, run, theme, exec, appHome, nextCommand, settings } from "herdr";
+import * as fs from "fs/promises";
+import {
+  agents, run, theme, exec, appHome, nextCommand, settings, readTextFile, writeTextFile, watchFolder, openOverlay,
+  props, setShared,
+} from "herdr";
+import { Settings } from "./settings.js";
+import * as cfg from "./config.js";
 
 const BLOCK = "usage";            // the layout block this mod lives in
 const NARROW = 160;
@@ -19,19 +31,20 @@ const ROW = 26;                   // compact row
 const PAD = 6;                    // compact strip's top/bottom padding
 const TILE = 26;                  // rail tile
 const RAIL_GAP = 6;
-const TICK_MS = 60_000;
-const LIMITS_EVERY = 5;           // ticks
+const CHECK_MS = 30_000;          // how often the cadence timer checks what's due
 const EXPAND = { duration: 160, easing: "ease-out" };
 const GLIDE = { duration: 420, easing: "ease-out" };
 
-const PROVIDERS = [
-  { key: "claude", label: "Claude", icon: "icons/claude.svg", brand: "#d97757",
-    owns: (a) => a.program?.key === "claude" || (a.app ?? "").startsWith("claude") },
-  { key: "codex", label: "Codex", icon: "icons/codex.svg", brand: "#7c8cf8",
-    owns: (a) => a.program?.key === "codex" || a.app === "codex" },
-  { key: "pi", label: "pi", icon: "icons/pi.svg", brand: "#4fb8b2",
-    owns: (a) => a.program?.key === "pi" || a.app === "pi" },
-];
+// Row metadata (label/icon/brand and the live-agent matchers) comes from
+// services.json, read here (config.parseServices; config.DEFAULT_SERVICES when
+// it can't be read). Edit that file to swap services in or out.
+
+// A live agent belongs to a service when its program key or app name matches.
+const owns = (a, m) => {
+  const app = a.app ?? "";
+  return (m.program && (a.program?.key === m.program || app.startsWith(m.program)))
+    || (m.apps ?? []).includes(app);
+};
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1 };
 
 const stop = (_e, cx) => cx.stop_propagation();
@@ -77,22 +90,67 @@ const level = (pct, t) => (pct >= 80 ? t.ansi1 : pct >= 50 ? t.ansi3 : t.ansi2);
 
 export default class AgentUsage extends View {
   init(_props, cx) {
+    // The settings screen, in one floating window (mods/usage-settings, ⚙ in the card): this copy
+    // renders it instead of the strip and stays out of the widget's work below.
+    const p = props() ?? {};
+    if (p.settings && p.float) { this.settings = new Settings(p.overlay, cx); return; }
     this.width = 248;
     this.detailH = 0;
     this.lastPx = null;
     this.busy = false;
     this.error = null;
-    this.ticks = 0;
     this.data = null;
     this.pinned = false;
+    this.pending = null;          // a refresh asked for while one ran: null | { limits }
+    this.cfgPath = cfg.configPath(appHome());
+    this.cfgDir = cfg.configDir(appHome());
+    this.io = { readTextFile, writeTextFile, mkdir: fs.mkdir };
+    this.cfgError = null;
+    this.writeError = null;
+    this.services = cfg.DEFAULT_SERVICES;
+    this.raw = {};                // last config.json that parsed
     try { this.data = JSON.parse(localStorage.getItem("data") ?? "null"); } catch {}
     try { this.pinned = localStorage.getItem("pinned") === "1"; } catch {}
-    this.refresh(cx, true);
-    cx.timer.every(TICK_MS, (cx) => {
-      this.ticks += 1;
-      this.refresh(cx, this.ticks % LIMITS_EVERY === 0);
+    // Services hidden from the strip used to live in localStorage; until migrateHidden has moved
+    // them into config.json, keep honoring them so the strip doesn't flash them back on.
+    this.legacyHidden = [];
+    try {
+      const legacy = JSON.parse(localStorage.getItem("hidden") ?? "null");
+      if (Array.isArray(legacy)) this.legacyHidden = legacy.filter((k) => typeof k === "string");
+    } catch {}
+    this.cfg = this.computeCfg();
+    this.lastScanAt = 0;
+    this.lastLimitsAt = 0;
+    // The first scan waits for the config, so disabled services are never scanned.
+    cx.spawn(async (cx) => {
+      await this.reloadConfig();
+      await this.migrateHidden();
+      this.refresh(cx, true);
+      cx.notify();
     });
-    // Key commands (keys.json: "agent-usage.toggle" / "agent-usage.refresh").
+    cx.timer.every(CHECK_MS, (cx) => {
+      // Slack of half a check: the timer drifts, and "59.9 s since" shouldn't wait 30 s more.
+      const now = Date.now();
+      const due = (last, min) => now - last >= min * 60_000 - CHECK_MS / 2;
+      const scan = due(this.lastScanAt, this.cfg.scan.everyMinutes);
+      const limits = due(this.lastLimitsAt, this.cfg.scan.limitsEveryMinutes);
+      if (scan || limits) this.refresh(cx, limits);
+    });
+    // The settings screen (and a hand edit) change config.json: follow along live.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        let changed;
+        try { await fs.mkdir(this.cfgDir, { recursive: true }); changed = await watchFolder(this.cfgDir); }
+        catch (e) { console.log(`agent-usage: config watch stopped: ${e}`); return; }
+        if (!changed.some((p) => String(p).endsWith("config.json"))) continue; // store.json churns every scan
+        const before = this.enabledKeys().join(",");
+        await this.reloadConfig();
+        if (this.enabledKeys().join(",") !== before) this.refresh(cx, true);
+        cx.notify();
+      }
+    });
+    // Key commands (keys.json: "agent-usage.toggle" / "agent-usage.refresh"; the settings screen
+    // asks for a refresh through "agent-usage.refresh" after it saves).
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
@@ -102,12 +160,85 @@ export default class AgentUsage extends View {
     });
   }
 
+  /** Effective config: the last good config.json + any not-yet-migrated legacy hidden list. */
+  computeCfg() {
+    const c = cfg.effective(this.services, this.raw);
+    for (const k of this.legacyHidden) {
+      const s = c.services[k];
+      if (s && typeof this.raw?.services?.[k]?.hidden !== "boolean") s.hidden = true;
+    }
+    return c;
+  }
+
+  /** Re-reads services.json and config.json. A broken config.json keeps the last good one (and says so). */
+  async reloadConfig() {
+    try {
+      const [svcText, rawText] = await Promise.all([
+        readTextFile(`${appHome()}/mods/agent-usage/services.json`),
+        readTextFile(this.cfgPath),
+      ]);
+      this.services = cfg.parseServices(svcText);
+      const parsed = cfg.parseRaw(rawText);
+      this.cfgError = parsed.error ?? null;
+      if (!parsed.error) this.raw = parsed.value;
+    } catch (e) {
+      this.cfgError = String(e?.message ?? e);
+    }
+    this.cfg = this.computeCfg();
+  }
+
+  /** Writes config.json through config.updateConfig, then reloads. Errors show on the card. */
+  async writeConfig(mutate) {
+    try {
+      this.raw = await cfg.updateConfig(this.cfgPath, this.cfgDir, mutate, this.io);
+      this.writeError = null;
+      this.cfg = this.computeCfg();
+      return true;
+    } catch (e) {
+      this.writeError = String(e?.message ?? e);
+      console.log(`agent-usage: ${this.writeError}`);
+      return false;
+    }
+  }
+
+  /** One-time: the localStorage hidden list becomes services.<key>.hidden in config.json. A service
+   *  that already has a hidden flag in the file keeps it. localStorage is cleared only once written. */
+  async migrateHidden() {
+    if (!this.legacyHidden.length || this.cfgError) return;
+    const ok = await this.writeConfig((raw) => {
+      for (const k of this.legacyHidden) {
+        if (!this.services.some((s) => s.key === k)) continue;
+        if (typeof raw.services?.[k]?.hidden === "boolean") continue;
+        cfg.setAt(raw, this.services, `services.${k}.hidden`, true);
+      }
+    });
+    if (!ok) return;
+    this.legacyHidden = [];
+    try { localStorage.removeItem("hidden"); } catch {}
+    this.cfg = this.computeCfg();
+  }
+
+  /** A service as the widget sees it: services.json entry (or the scan's meta) + the person's config. */
+  effectiveService(key, meta) {
+    const svc = this.services.find((s) => s.key === key) ?? { key, label: key, ...(meta ?? {}) };
+    return { ...svc, label: svc.label ?? key, ...(this.cfg.services[key] ?? cfg.serviceOf(svc, {})) };
+  }
+
+  /** Keys of the services to scan, in services.json order. */
+  enabledKeys() { return this.services.filter((s) => this.cfg.services[s.key]?.enabled !== false).map((s) => s.key); }
+
   refresh(cx, limits) {
-    if (this.busy) return;
+    if (this.busy) {
+      // Asked for while a scan runs (a settings save, the ↻): run once more when it ends.
+      this.pending = { limits: !!limits || !!this.pending?.limits };
+      return;
+    }
     this.busy = true;
+    this.lastScanAt = Date.now();
+    if (limits) this.lastLimitsAt = Date.now();
     cx.spawn(async (cx) => {
       try {
-        const args = [`${appHome()}/mods/agent-usage/scan.mjs`];
+        const args = [`${appHome()}/mods/agent-usage/scan.mjs`, "--services", this.enabledKeys().join(",")];
         if (limits) args.push("--limits");
         const r = await exec("node", args, { timeout: 60_000 });
         const next = JSON.parse(r.stdout);
@@ -118,13 +249,22 @@ export default class AgentUsage extends View {
         this.data = next;
         this.error = null;
         try { localStorage.setItem("data", JSON.stringify(next)); } catch {}
+        setShared("agent-usage.lastScan", next.at ?? new Date().toISOString()); // the settings page shows it
       } catch (e) {
-        this.error = /not found|No such file|ENOENT|spawn/i.test(String(e)) ? "needs Node 18+" : "scan failed";
+        this.error = /not found|No such file|ENOENT|spawn/i.test(String(e)) ? "needs Node" : "scan failed";
         console.log(`agent-usage: ${e}`);
       }
       this.busy = false;
+      const again = this.pending;
+      this.pending = null;
+      if (again) this.refresh(cx, again.limits);
       cx.notify();
     });
+  }
+
+  /** The window copy (settings) closes: free its input states and stop its watch loop. */
+  async close() {
+    this.settings?.dispose();
   }
 
   togglePin(cx) {
@@ -133,19 +273,43 @@ export default class AgentUsage extends View {
     cx.notify();
   }
 
+  toggleHidden(key, cx) {
+    const hidden = !this.effectiveService(key).hidden;
+    cx.spawn(async (cx) => {
+      await this.writeConfig((raw) => cfg.setAt(raw, this.services, `services.${key}.hidden`, hidden));
+      cx.notify();
+    });
+  }
+
+  showAll(cx) {
+    cx.spawn(async (cx) => {
+      const keys = this.hiddenKeys();
+      await this.writeConfig((raw) => { for (const k of keys) cfg.setAt(raw, this.services, `services.${k}.hidden`, false); });
+      cx.notify();
+    });
+  }
+
+  /** Services this scan knows about that the person hid from the strip. */
+  hiddenKeys() {
+    return Object.keys(this.data?.providers ?? {}).filter((k) => this.effectiveService(k).hidden);
+  }
+
   // ---------------------------------------------------------------- model
 
   rows() {
     const live = agents();
     const out = [];
-    for (const p of PROVIDERS) {
-      const d = this.data?.providers?.[p.key] ?? null;
-      const mine = live.filter(p.owns);
+    for (const [key, raw] of Object.entries(this.data?.providers ?? {})) {
+      const d = raw ?? null;
+      // Effective service: scan meta (label/icon/brand/matchers) + the person's config.json overrides.
+      const m = this.effectiveService(key, d?.meta);
+      if (!m.enabled || m.hidden) continue;
+      const mine = live.filter((a) => owns(a, m));
       const used = (d?.week?.msgs ?? 0) > 0 || d?.limits?.state === "ok";
       if (!used && mine.length === 0) continue;
       const windows = d?.limits?.state === "ok" ? d.limits.windows ?? [] : [];
       const status = mine.reduce((s, a) => ((URGENCY[a.status] ?? 0) > (URGENCY[s] ?? 0) ? a.status : s), null);
-      out.push({ ...p, d, agents: mine, windows, primary: windows[0] ?? null,
+      out.push({ ...m, api: !!m.api, d, agents: mine, windows, primary: windows[0] ?? null,
         weekly: windows.find((w) => w.label === "week") ?? null, status });
     }
     return out;
@@ -175,28 +339,30 @@ export default class AgentUsage extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); run("agent.focus", { terminal: a.address }); });
   }
 
-  // A thin limit bar; `tick` marks a second window (the weekly one) on the same track.
-  bar(id, pct, t, h, tick = null) {
+  // A thin limit bar; `ticks` mark the other windows (weekly, monthly) on the same track.
+  bar(id, pct, t, h, ticks = []) {
     const p = Math.max(0, Math.min(100, pct ?? 0));
     const color = level(p, t);
+    const mark = (x, i) => div().id(`${id}-tick-${i}`).absolute().top(-1).h(h + 2).w(2).rounded(1)
+      .left(`${Math.max(0, Math.min(98, x))}%`).bg(alpha(t.foreground, 0.45));
     return div().id(id).relative().flex_1().min_w(0).h(h).rounded(h).bg(alpha(t.foreground, 0.08))
       .child(div().id(`${id}-fill`).absolute().left(0).top(0).h(h).rounded(h).bg(color)
         .w(`${p}%`).transition("width", GLIDE)
         .when(p >= 90, (d) => d.loop("opacity", { from: 0.55, to: 1, period: 1600 })))
-      .when(tick != null, (el) => el.child(div().absolute().top(-1).h(h + 2).w(2).rounded(1)
-        .left(`${Math.max(0, Math.min(98, tick))}%`).bg(alpha(t.foreground, 0.45))));
+      .when(ticks[0] != null, (el) => el.child(mark(ticks[0], 0)))
+      .when(ticks[1] != null, (el) => el.child(mark(ticks[1], 1)));
   }
 
   // ---------------------------------------------------------------- compact
 
   compactRow(r, t) {
-    const value = r.primary ? `${Math.round(r.primary.pct)}%` : fmtCost(r.d?.today?.cost ?? 0);
+    const value = r.primary ? `${Math.round(r.primary.pct)}%` : r.api ? "—" : fmtCost(r.d?.today?.cost ?? 0);
     const valueColor = r.primary ? level(r.primary.pct, t) : t.muted;
     return h_flex().id(`row-${r.key}`).h(ROW).flex_none().mx(6).px(6).gap(8).items_center().rounded(6)
       .child(this.glyph(r, 18, t))
       .child(div().flex_none().w(44).truncate().text_size(12).text_color(t.muted).child(r.label))
       .child(r.primary
-        ? this.bar(`bar-${r.key}`, r.primary.pct, t, 4, r.weekly && r.weekly !== r.primary ? r.weekly.pct : null)
+        ? this.bar(`bar-${r.key}`, r.primary.pct, t, 4, r.windows.slice(1, 3).map((w) => w.pct))
         : div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
           .child(`${fmtTokens(this.total(r.d?.today))} today`))
       .child(h_flex().flex_none().min_w(34).justify_end().text_size(11.5).text_color(valueColor).child(value))
@@ -240,11 +406,22 @@ export default class AgentUsage extends View {
 
   limitNote(r, t) {
     const s = r.d?.limits?.state;
-    const text = s === "stale" ? "Open Claude to refresh its sign-in for limits"
-      : s === "signed-out" ? "Not signed in: no plan limits"
+    const text = s === "stale" ? `${r.label}: session expired — reconnect to refresh limits`
+      : s === "signed-out" ? (r.api ? "Not connected: add a Go API key (env, pi or opencode auth)" : "Not signed in: no plan limits")
       : s === "error" ? `Limits unavailable (${r.d.limits.error ?? "error"})`
       : null;
     return text ? div().text_size(11).text_color(t.dim).child(text) : null;
+  }
+
+  // Show/hide this service in the strip (persisted; see toggleHidden). Drawn on
+  // in the card, since that's where you turn a service off.
+  hideSwitch(r, t) {
+    return div().id(`hide-${r.key}`).relative().w(30).h(17).rounded(9).cursor_pointer().flex_none()
+      .bg(alpha(r.brand, 0.4)).border_1().border_color(alpha(r.brand, 0.6))
+      .tooltip(`Hide ${r.label}`)
+      .on_mouse_down("left", stop)
+      .on_click((_e, cx) => { cx.stop_propagation(); this.toggleHidden(r.key, cx); })
+      .child(div().absolute().top(2).left(15).w(11).h(11).rounded(6).bg(r.brand ?? t.muted));
   }
 
   section(r, t) {
@@ -257,13 +434,15 @@ export default class AgentUsage extends View {
         .when(Boolean(plan), (el) => el.child(div().px(5).rounded(4).text_size(10)
           .bg(alpha(r.brand, 0.16)).text_color(r.brand).child(String(plan).toUpperCase())))
         .child(div().flex_1())
-        .child(h_flex().gap(4).items_center().children(r.agents.slice(0, 8).map((a) => this.agentDot(a, t)))))
+        .child(this.hideSwitch(r, t))
+        .when(r.agents.length > 0, (el) => el.child(h_flex().gap(4).items_center()
+          .children(r.agents.slice(0, 8).map((a) => this.agentDot(a, t))))))
       .children(r.windows.map((w, i) => this.windowLine(r, w, i, t)))
       .when(Boolean(note), (el) => el.child(note))
-      .child(h_flex().gap(10)
+      .when(!r.api, (el) => el.child(h_flex().gap(10)
         .child(this.stat("Today", r.d?.today, r.d?.estimated, t))
-        .child(this.stat("7 days", r.d?.week, r.d?.estimated, t)))
-      .when((r.d?.daily ?? []).length > 0, (el) => el.child(this.spark(r, t)));
+        .child(this.stat("7 days", r.d?.week, r.d?.estimated, t))))
+      .when(!r.api && (r.d?.daily ?? []).length > 0, (el) => el.child(this.spark(r, t)));
   }
 
   detail(list, t, idPrefix) {
@@ -275,7 +454,23 @@ export default class AgentUsage extends View {
       .child(h_flex().items_center().text_size(10.5).text_color(t.dim)
         .child(div().flex_1().child(this.error
           ? this.error
+          : this.writeError
+          ? `Could not save: ${this.writeError}`
+          : this.cfgError
+          ? `config.json: ${this.cfgError} (using the last good settings)`
           : `${list.some((r) => r.d?.estimated) ? "~ estimated at API prices · " : ""}${fmtAgo(this.data?.at)}`))
+        .when(this.hiddenKeys().length > 0, (el) => el.child(div().id(`${idPrefix}-show`).px(4).rounded(4).cursor_pointer()
+          .hover((s) => s.text_color(t.foreground).bg(t.hover))
+          .tooltip("Show hidden services")
+          .on_mouse_down("left", stop)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.showAll(cx); })
+          .child(`${this.hiddenKeys().length} hidden · show`)))
+        .child(div().id(`${idPrefix}-settings`).px(4).rounded(4).cursor_pointer()
+          .hover((s) => s.text_color(t.foreground).bg(t.hover))
+          .tooltip("Usage settings (ctrl-shift-u)")
+          .on_mouse_down("left", stop)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.openSettings(); })
+          .child(div().text_size(13).child("⚙")))
         .child(div().id(`${idPrefix}-refresh`).px(4).rounded(4).cursor_pointer()
           .when(this.busy, (d) => d.loop("opacity", { from: 0.3, to: 1, period: 800 }))
           .hover((s) => s.text_color(t.foreground).bg(t.hover))
@@ -353,7 +548,12 @@ export default class AgentUsage extends View {
       }));
   }
 
+  openSettings() {
+    openOverlay({ kind: "window", mod: "agent-usage", props: { settings: true, float: true }, key: "usage-settings", width: 640, height: 0.75 });
+  }
+
   render() {
+    if (this.settings) return this.settings.render();
     const t = theme();
     const list = this.rows();
     return v_flex()

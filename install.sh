@@ -47,6 +47,67 @@ bootstrap() {
 
 review_mjs() { node "$REPO_ROOT/herdr-review/install.mjs" "$@"; }
 
+# The keys.json binding install.sh manages for the usage settings (idempotent; backs the file up
+# before the first change). Node does the JSON surgery; bash can't do that portably.
+USAGE_BINDING='ctrl-shift-u'; USAGE_MOD='usage-settings'
+keys_json() { KEYS_FILE="$HERDR_HOME/keys.json" USAGE_BINDING="$USAGE_BINDING" USAGE_MOD="$USAGE_MOD" node "$@"; }
+
+usage_binding_hint() { echo "bind ctrl-shift-u by hand: in $HERDR_HOME/keys.json \"global\", add \"ctrl-shift-u\": {\"command\":\"mod.open\",\"args\":{\"name\":\"usage-settings\"}}"; }
+
+ensure_binding() {
+  has node || { warn "  node not found; $(usage_binding_hint)"; return 0; }
+  # No keys.json yet (Herdr hasn't run): don't create one holding only this key — Herdr treats the
+  # file as the whole key map. Re-run install after Herdr has started once.
+  [ -f "$HERDR_HOME/keys.json" ] || { warn "  no keys.json yet (start Herdr once, then re-run install); or $(usage_binding_hint)"; return 0; }
+  keys_json -e '
+    const fs = require("fs");
+    const f = process.env.KEYS_FILE, binding = process.env.USAGE_BINDING, mod = process.env.USAGE_MOD;
+    let j;
+    try { j = JSON.parse(fs.readFileSync(f, "utf8")); } catch { j = null; }
+    if (!j || typeof j !== "object" || Array.isArray(j)) { console.log("warn    keys.json isn\x27t a valid JSON object; not touching it"); process.exit(0); }
+    if (!j.global || typeof j.global !== "object") j.global = {};
+    const want = { command: "mod.open", args: { name: mod } };
+    const cur = JSON.stringify(j.global[binding] ?? null);
+    if (cur === JSON.stringify(want)) { console.log("        keys.json already binds " + binding); process.exit(0); }
+    if (j.global[binding] !== undefined) { console.log("warn    keys.json already uses " + binding + " for " + JSON.stringify(j.global[binding]) + "; leaving it"); process.exit(0); }
+    const b = f + ".bak-" + mod;
+    let note;
+    if (fs.existsSync(b)) note = "kept the earlier backup keys.json.bak-" + mod;
+    else { fs.copyFileSync(f, b); note = "backup: keys.json.bak-" + mod; }
+    j.global[binding] = want;
+    fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+    console.log("bound   " + binding + " -> " + mod + " in keys.json (" + note + ")");
+  ' || warn "  could not update keys.json"
+}
+
+remove_binding() {
+  has node || return 0
+  keys_json -e '
+    const fs = require("fs");
+    const f = process.env.KEYS_FILE, binding = process.env.USAGE_BINDING, mod = process.env.USAGE_MOD;
+    let j;
+    try { j = JSON.parse(fs.readFileSync(f, "utf8")); } catch { process.exit(0); }
+    const want = JSON.stringify({ command: "mod.open", args: { name: mod } });
+    if (!j?.global || JSON.stringify(j.global[binding] ?? null) !== want) process.exit(0);
+    delete j.global[binding];
+    fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+    console.log("unbound " + binding + " from keys.json");
+  ' || true
+}
+
+# current | not bound | bound to something else — for status.
+binding_state() {
+  has node || { echo "node not found"; return; }
+  keys_json -e '
+    const fs = require("fs");
+    const f = process.env.KEYS_FILE, binding = process.env.USAGE_BINDING, mod = process.env.USAGE_MOD;
+    let j; try { j = JSON.parse(fs.readFileSync(f, "utf8")); } catch { console.log("missing"); process.exit(0); }
+    const cur = j?.global?.[binding];
+    console.log(cur === undefined ? "missing"
+      : JSON.stringify(cur) === JSON.stringify({ command: "mod.open", args: { name: mod } }) ? "current" : "bound to something else");
+  ' 2>/dev/null || echo "unreadable"
+}
+
 install_target() {
   case "$1" in
     git)     say "git:";     bash "$REPO_ROOT/herdr-git/sync.sh" ;;
@@ -55,7 +116,8 @@ install_target() {
     usage)
       say "usage:"
       has node || warn "  node not found; the usage widget needs Node.js 18+ to read usage (installing anyway)"
-      bash "$REPO_ROOT/herdr-usage/sync.sh" ;;
+      bash "$REPO_ROOT/herdr-usage/sync.sh"
+      ensure_binding ;;
     review)
       say "review:"
       if has node; then review_mjs install all
@@ -88,7 +150,10 @@ status_target() {
   case "$1" in
     git)     show mods/git "$(mod_state "$REPO_ROOT/herdr-git" git --exclude sync.sh)" || r=1 ;;
     sidebar) show mods/space-tree "$(mod_state "$REPO_ROOT/herdr-sidebar/space-tree" space-tree)" || r=1 ;;
-    usage)   show mods/agent-usage "$(mod_state "$REPO_ROOT/herdr-usage/agent-usage" agent-usage)" || r=1 ;;
+    usage)
+      show mods/agent-usage "$(mod_state "$REPO_ROOT/herdr-usage/agent-usage" agent-usage)" || r=1
+      show mods/usage-settings "$(mod_state "$REPO_ROOT/herdr-usage/usage-settings" usage-settings)" || r=1
+      show "keys.json $USAGE_BINDING" "$(binding_state)" || r=1 ;;
     minimal)
       show mods/space-icons "$(mod_state "$REPO_ROOT/herdr-minimal/space-icons" space-icons)" || r=1
       for f in minimal.json minimal.svg; do
@@ -104,11 +169,17 @@ status_target() {
 uninstall_target() {
   local name
   case "$1" in
-    git) name=git ;; minimal) name=space-icons ;; sidebar) name=space-tree ;; usage) name=agent-usage ;;
+    git) name=git ;; minimal) name=space-icons ;; sidebar) name=space-tree ;; usage) name="agent-usage usage-settings" ;;
     review) say "review:"; if has node; then review_mjs uninstall all; else warn "  node not found; skipped"; fi; return ;;
   esac
-  rm -rf "${HERDR_HOME:?}/mods/$name"
-  say "removed mods/$name"
+  for n in $name; do
+    rm -rf "${HERDR_HOME:?}/mods/$n"
+    say "removed mods/$n"
+  done
+  if [ "$1" = usage ]; then
+    remove_binding
+    dim "  kept data/agent-usage/ (your settings) and any keys.json.bak-$USAGE_MOD; delete them by hand if unwanted"
+  fi
 }
 
 watch_all() {

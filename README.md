@@ -7,7 +7,7 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 | `herdr-git/` | Git graph and status pane (ctrl-shift-g) | `mods/git` |
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
-| `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar (see below) | `mods/agent-usage` |
+| `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
 | `herdr-review/` | Review mod and inbox, plus a Claude Code plugin and a pi extension | `mods/review`, `mods/review-inbox` (see [its README](herdr-review/README.md)) |
 
 `HERDR_APP_HOME` defaults to `~/.config/herdr-app`.
@@ -41,14 +41,19 @@ The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a c
 
 ## Agent usage widget
 
-`herdr-usage/agent-usage` shows one row per coding agent (Claude Code, Codex, pi) at the bottom of the sidebar: a bar for the plan limit in use (5h window, with a tick for the weekly one), the percent or today's cost, and a dot that pulses while one of its agents works. Bars turn green, then amber at 50%, then red at 80%. Hover the strip for a detail card with both limit windows, reset times, today and 7-day tokens and cost, a 7-day sparkline and the live agents (click a dot to focus it). Click the strip to pin the detail open. A folded sidebar shows a rail of tiles instead. Bind `agent-usage.toggle` or `agent-usage.refresh` in `keys.json` if you want keys for them.
+`herdr-usage/agent-usage` shows one row per tracked service (Claude Code, Codex, pi, OpenCode Go) at the bottom of the sidebar: a bar for the plan limit in use (5h window, with ticks for the other windows — weekly and monthly where the service has them), the percent or today's cost, and a dot that pulses while one of its agents works. Bars turn green, then amber at 50%, then red at 80%. Hover the strip for a detail card with every limit window, reset times, today and 7-day tokens and cost, a 7-day sparkline and the live agents (click a dot to focus it). Click the strip to pin the detail open. A folded sidebar shows a rail of tiles instead. Bind `agent-usage.toggle` or `agent-usage.refresh` in `keys.json` if you want keys for them.
 
-It runs `node scan.mjs` from the mod folder every minute. The scanner:
+**Toggling and swapping services.** Each service has a switch in the detail card — flip it off and the service disappears from the strip, the card and the rail (the card footer shows "N hidden · show" to bring them back). Which services exist at all is `herdr-usage/agent-usage/services.json`: add, remove or set `"enabled": false` there and sync — no code changes. Each entry gives the row's `label`, `icon`, `brand` color, how live agents match it (`program`/`apps`), and `api: true` for services whose usage lives server-side instead of in local logs.
+
+**Settings (ctrl-shift-u).** The ⚙ in the card's footer, or ctrl-shift-u, opens a floating settings window (bind `mod.open {name: "usage-settings"}` if your keys.json lost the binding — `./install.sh install usage` adds it for you). Per service: enabled (off = not scanned at all) and in strip (off = scanned, but left out of the widget; the card's switch writes the same setting). Global: how often the scanner re-reads logs (1–60 min) and the limit APIs (5–60 min), plus a clear-cache button. Your edits go to `<HERDR_APP_HOME>/data/agent-usage/config.json`, holding only what differs from the defaults, so re-running the installer or `sync.sh` never clobbers them; the widget follows changes live (it watches the file). A hand-broken config.json is never overwritten: the widget keeps its last good settings and Save refuses until the file parses. Labels, icons, colors and live-agent matchers stay in `services.json`; estimate prices, API endpoints and log dirs live in `scan.mjs`. The widget tells the scanner which services to scan (`scan.mjs --services a,b`), so `scan.mjs` never reads config.json.
+
+It runs `node scan.mjs` from the mod folder every `scan.everyMinutes` (a minute by default, set in the settings). The scanner:
 
 - reads session logs under `~/.claude/projects`, `~/.pi/agent/sessions` and `~/.codex/sessions` (last 8 days) and caches its read offsets in `~/.cache/herdr-agent-usage/`.
-- every 5 minutes, reads the Claude Code OAuth token (from the macOS Keychain item `Claude Code-credentials` or `~/.claude/.credentials.json`) and calls `https://api.anthropic.com/api/oauth/usage` for plan limits. It never refreshes or prints the token. If the token has expired, the card asks you to open Claude. Codex limits come from its logs, with no network call.
+- every `scan.limitsEveryMinutes` (five minutes by default), reads the Claude Code OAuth token (from the macOS Keychain item `Claude Code-credentials` or `~/.claude/.credentials.json`) and calls `https://api.anthropic.com/api/oauth/usage` for plan limits. It never refreshes or prints the token. If the token has expired, the card asks you to reconnect. Codex limits come from its logs, with no network call.
+- asks `https://opencode.ai/zen/go/v1/usage` (with the plan's API key) for OpenCode Go's rolling 5h / weekly / monthly usage. The key is taken from the first of: `OPENCODE_GO_API_KEY` (or `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY`), pi's `~/.pi/agent/auth.json`, or the opencode CLI's `~/.local/share/opencode/auth.json` — wherever you configured the Go key. It is read, never printed. Without a key the card shows a "not connected" note.
 
-Claude cost is estimated at API list prices, shown with a `~`. pi reports its own cost.
+Claude cost is estimated at API list prices, shown with a `~`. pi reports its own cost. OpenCode Go's API reports percentages and reset times only — no dollar figures or history — so its card section shows the three windows without token stats.
 
 ## Develop
 

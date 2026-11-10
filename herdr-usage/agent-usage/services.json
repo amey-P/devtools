@@ -1,0 +1,12 @@
+{
+  "services": [
+    { "key": "claude", "label": "Claude", "icon": "icons/claude.svg", "brand": "#d97757",
+      "enabled": true, "program": "claude", "apps": ["claude"] },
+    { "key": "codex", "label": "Codex", "icon": "icons/codex.svg", "brand": "#7c8cf8",
+      "enabled": true, "program": "codex", "apps": ["codex"] },
+    { "key": "pi", "label": "pi", "icon": "icons/pi.svg", "brand": "#4fb8b2",
+      "enabled": true, "program": "pi", "apps": ["pi"] },
+    { "key": "opencode-go", "label": "Go", "icon": "mods/agent-usage/icons/opencode.svg", "brand": "#a78bfa",
+      "enabled": true, "program": "opencode", "apps": ["opencode"], "api": true }
+  ]
+}

@@ -3,24 +3,59 @@
 // --limits, plan-limit usage) and prints one JSON object on stdout.
 //
 //   node scan.mjs            tokens and cost for today and the last 7 days
-//   node scan.mjs --limits   also plan limits (Claude: api.anthropic.com; Codex: its logs)
+//   node scan.mjs --limits   also plan limits (Claude: api.anthropic.com; Codex: its
+//                            logs; OpenCode Go: opencode.ai/zen/go/v1/usage)
+//
+// Which services are tracked comes from services.json next to this file: swap
+// one in/out (or set "enabled": false) there and both sides follow — main.js
+// renders whatever this script reports. Log-type services are read from their
+// local logs; api-type services (OpenCode Go) have no local logs — their usage
+// is server-side, fetched with the plan's API key.
 //
 // Logs are read incrementally: a cache in ~/.cache/herdr-agent-usage remembers how
 // far into each (append-only) session file we got, so later runs only read new
-// lines. The Claude OAuth token is read, never refreshed, never printed.
-// Always exits 0 with valid JSON; failures are reported per provider as `error`.
+// lines, and the last api usage seen. Secrets (Claude OAuth token, Go API key)
+// are read, never refreshed, never printed. Always exits 0 with valid JSON;
+// failures are reported per provider as `error`.
+//
+//   node scan.mjs --services a,b   scan only these services (keys from services.json). The
+//                                  widget passes the ones enabled in the person's settings —
+//                                  this script never reads data/agent-usage/config.json.
+//   node scan.mjs --reset-cache    delete the cache and exit (the settings screen's "Clear & rescan";
+//                                  the widget's next scan rebuilds it)
 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const HOME = os.homedir();
 const DAYS = 7;
 const KEEP_MS = (DAYS + 1) * 86400_000;
 const CACHE_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(HOME, ".cache"), "herdr-agent-usage");
 const CACHE_FILE = path.join(CACHE_DIR, "scan.json");
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+function argValue(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : null;
+}
+
+// ---------------------------------------------------------------- services
+// Which services to scan: --services a,b when given (the widget's enabled set), else every
+// services.json entry not marked "enabled": false. Without services.json, every known provider.
+function loadServices(only) {
+  let list = null;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(HERE, "services.json"), "utf8"));
+    list = Array.isArray(j.services) ? j.services.filter((s) => s && typeof s.key === "string") : null;
+  } catch {}
+  if (!list || !list.length) list = Object.keys(providers).map((key) => ({ key }));
+  if (only) return list.filter((s) => only.has(s.key));
+  return list.filter((s) => s.enabled !== false);
+}
 
 // $ per million tokens: [input, output, cache write 5m, cache write 1h, cache read].
 // First matching prefix wins. Estimates only (API list prices).
@@ -95,6 +130,13 @@ const providers = {
         (last.output_tokens || 0), 0, 0, cached, null, null];
     },
   },
+  "opencode-go": {
+    // OpenCode Go (opencode.ai/console/go) is a flat subscription whose usage
+    // limits — rolling 5h, weekly, monthly — live server-side. No local logs;
+    // the numbers come from an authenticated API call (see goLimits below).
+    api: true,
+    limits: goLimits,
+  },
 };
 
 // ---------------------------------------------------------------- files
@@ -133,7 +175,7 @@ function loadCache() {
     const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
     if (c.v === CACHE_VERSION) return c;
   } catch {}
-  return { v: CACHE_VERSION, files: {} };
+  return { v: CACHE_VERSION, files: {}, services: {} };
 }
 
 function saveCache(c) {
@@ -287,22 +329,95 @@ function codexLimits(rl) {
   return windows.length ? { state: "ok", plan: rl.plan_type || null, windows, as_of: rl.at } : null;
 }
 
+// The Go plan's API key, from the first source that has one: env vars, then pi's
+// and the opencode CLI's auth stores (both map provider name → { type, key }).
+// Read, never printed.
+function goApiKey() {
+  for (const v of [process.env.OPENCODE_GO_API_KEY, process.env.OPENCODE_API_KEY, process.env.OPENCODE_ZEN_API_KEY]) {
+    if (v) return v;
+  }
+  const files = [
+    path.join(HOME, ".pi", "agent", "auth.json"),
+    path.join(process.env.OPENCODE_CONFIG_DIR || path.join(HOME, ".local", "share", "opencode"), "auth.json"),
+  ];
+  for (const f of files) {
+    let j; try { j = JSON.parse(fs.readFileSync(f, "utf8")); } catch { continue; }
+    for (const name of ["opencode-go", "opencode-zen", "opencode"]) {
+      const k = j?.[name]?.key;
+      if (typeof k === "string" && k) return k;
+    }
+  }
+  return null;
+}
+
+const GO_WINDOWS = [["rolling", "5h", 300], ["weekly", "week", 10080], ["monthly", "month", 43200]];
+
+async function goLimits() {
+  const key = goApiKey();
+  if (!key) return { state: "signed-out" };
+  try {
+    const res = await fetch("https://opencode.ai/zen/go/v1/usage", {
+      headers: { Authorization: `Bearer ${key}`, "User-Agent": "herdr-agent-usage" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 401) return { state: "stale" };
+    if (!res.ok) return { state: "error", error: `HTTP ${res.status}` };
+    const j = await res.json();
+    const u = j?.usage ?? {};
+    const windows = GO_WINDOWS.flatMap(([name, label, minutes]) => {
+      const w = u[name];
+      if (!w || typeof w.percent !== "number") return [];
+      const at = w.resetsAt ? (typeof w.resetsAt === "number" ? new Date(w.resetsAt * 1000) : new Date(w.resetsAt)) : null;
+      return [{ label, pct: Math.max(0, Math.min(100, w.percent)),
+        resets_at: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null, minutes }];
+    });
+    if (!windows.length) return { state: "error", error: "no usage windows in response" };
+    return { state: "ok", windows };
+  } catch (e) {
+    return { state: "error", error: String(e?.message || e) };
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
   const wantLimits = process.argv.includes("--limits");
+  if (process.argv.includes("--reset-cache")) {
+    fs.rmSync(CACHE_DIR, { recursive: true, force: true }); // throws → exit 1, reported by the caller
+    return;
+  }
+  const servicesArg = argValue("--services");
+  const only = servicesArg == null ? null : new Set(servicesArg.split(",").map((s) => s.trim()).filter(Boolean));
   const now = Date.now();
   const cache = loadCache();
+  cache.services ??= {};
   const out = { at: new Date(now).toISOString(), providers: {} };
   const codexRL = {};
-  for (const [name, prov] of Object.entries(providers)) {
-    if (!prov.dirs.some((d) => fs.existsSync(d))) continue;
+  for (const svc of loadServices(only)) {
+    const prov = providers[svc.key];
+    const meta = {
+      label: svc.label ?? svc.key, icon: svc.icon ?? null, brand: svc.brand ?? null, api: !!prov?.api,
+      program: svc.program ?? null, apps: Array.isArray(svc.apps) ? svc.apps : [],
+    };
     try {
-      const rl = scanProvider(name, prov, cache, now);
-      if (name === "codex") codexRL.v = rl;
-      out.providers[name] = rollup(name, cache, now);
+      if (prov?.api) {
+        // Server-side usage only: fetch on --limits runs (and the first run, so a
+        // fresh install doesn't wait 5 minutes), serve the last result between.
+        if (wantLimits || !cache.services[svc.key]) {
+          cache.services[svc.key] = { at: new Date(now).toISOString(), limits: await prov.limits() };
+        }
+        const hit = cache.services[svc.key];
+        out.providers[svc.key] = { meta, ...(hit
+          ? { limits: hit.limits, limits_at: hit.at }
+          : { limits: { state: "signed-out" } }) };
+        continue;
+      }
+      if (!prov || !prov.dirs.some((d) => fs.existsSync(d))) continue;
+      const rl = scanProvider(svc.key, prov, cache, now);
+      if (svc.key === "codex") codexRL.v = rl;
+      out.providers[svc.key] = { meta, ...rollup(svc.key, cache, now) };
     } catch (e) {
-      out.providers[name] = { error: String(e?.message || e) };
+      out.providers[svc.key] = { meta, error: String(e?.message || e) };
     }
   }
   saveCache(cache);
@@ -314,5 +429,6 @@ async function main() {
 }
 
 main().catch((e) => {
+  if (process.argv.includes("--reset-cache")) { process.stderr.write(`${e?.message || e}\n`); process.exitCode = 1; return; }
   process.stdout.write(JSON.stringify({ at: new Date().toISOString(), error: String(e?.message || e), providers: {} }));
 });

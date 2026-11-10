@@ -9,3 +9,4 @@ jsconfig.json
 .installed.json
 # local agent plans
 .pi/
+PLAN.md

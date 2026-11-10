@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "agent-usage settings",
+  "description": "Your changes over mods/agent-usage/services.json and the widget's scan defaults. Written by the usage settings screen (ctrl-shift-u) and the card's hide switch; holds only what differs from the defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "everyMinutes": { "type": "integer", "minimum": 1, "maximum": 60, "default": 1, "description": "How often the strip re-reads session logs." },
+        "limitsEveryMinutes": { "type": "integer", "minimum": 5, "maximum": 60, "default": 5, "description": "How often plan limits are fetched (Claude, OpenCode Go; rate-limited server-side)." }
+      }
+    },
+    "services": {
+      "type": "object",
+      "description": "Per-service switches, keyed by the service's key in services.json.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "description": "false: don't scan it at all." },
+          "hidden": { "type": "boolean", "description": "true: keep scanning, but leave it out of the strip, card and rail." }
+        }
+      }
+    }
+  }
+}
