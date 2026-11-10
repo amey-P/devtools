@@ -1,5 +1,26 @@
 // Regenerates mod/config.schema.json from mod/config.defaults.json (run after adding or changing a setting):
 //   node scripts/config-schema.mjs
+/** @import { RawTree, Text } from "../mod/types.js" */
+
+/** A JSON-Schema node for one setting or heading (config.schema.json): a heading's object schema, or a leaf's
+ *  type/enum/anyOf constraints. Carries the description, the default and the legacy-key metadata too. */
+/** @typedef {object} Schema
+ *  @property {string} [type]
+ *  @property {boolean} [additionalProperties]
+ *  @property {{ [k: string]: Schema }} [properties]
+ *  @property {{ type: string }} [items]
+ *  @property {Schema[]} [anyOf]
+ *  @property {number} [const]
+ *  @property {number} [minimum]
+ *  @property {number} [maximum]
+ *  @property {number} [exclusiveMinimum]
+ *  @property {string[]} [enum]
+ *  @property {string} [description]
+ *  @property {Text | number | boolean} [default]
+ *  @property {string} [$schema]
+ *  @property {string} [title]
+ *  @property {boolean} [deprecated] */
+
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +29,7 @@ const d = JSON.parse(readFileSync(join(dir, "config.defaults.json"), "utf8"));
 const core = await import(join(dir, "config-core.js"));
 const text = { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] };
 const size = { type: "number", anyOf: [{ exclusiveMinimum: 0, maximum: 1 }, { minimum: 200 }] };
+/** @type {Record<string, string>} */
 const DESC = {
   window: "Where and how a review opens.",
   "window.place": "float: a floating window · right / down: a split beside the agent · tab: a new tab. $HERDR_REVIEW_PLACE and a per-review place override it.",
@@ -37,9 +59,17 @@ const DESC = {
   "prompts.pi.planMode": "Told to pi when plan mode starts. {tool}: the submit tool.",
   "prompts.pi.planOff": "Told to pi when plan mode ends.",
 };
+/** @type {Record<string, string[]>} */
 const ENUMS = { "window.place": core.PLACES, "window.arrive": core.ARRIVALS, "ui.sidebar": core.SIDEBARS };
+/** @type {Record<string, Schema>} */
 const RANGES = { "ui.textSize": { anyOf: [{ const: 0 }, { minimum: 9, maximum: 24 }] }, "ui.contentWidth": { minimum: 400, maximum: 4000 }, "ui.sidebarWidth": { minimum: 200, maximum: 800 } };
+/** Builds the schema subtree for a defaults value: headings recurse, leaves get their type, enum, range and
+ *  description.
+ *  @param {string | string[] | number | boolean | RawTree} v
+ *  @param {string} path
+ *  @returns {Schema} */
 function node(v, path) {
+  /** @type {Schema} */
   let s;
   if (v && typeof v === "object" && !Array.isArray(v)) {
     s = { type: "object", additionalProperties: false, properties: {} };
@@ -50,7 +80,7 @@ function node(v, path) {
   else s = { type: typeof v, ...(RANGES[path] ?? {}) };
   if (ENUMS[path]) s.enum = ENUMS[path];
   if (DESC[path]) s.description = DESC[path];
-  if (!(v && typeof v === "object" && !Array.isArray(v))) s.default = v;
+  if (!(v && typeof v === "object" && !Array.isArray(v))) s.default = /** @type {Text | number | boolean} */ (v);
   return s;
 }
 const root = node(d, "");
