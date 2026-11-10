@@ -494,6 +494,8 @@ export default class Review extends View {
     });
   }
 
+  /** Reopens the reply review whenever the agent's reply file changes.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   watchReplies(cx) {
     if (this.id) return;
     const dir = `${appHome()}/data/review/replies`;
@@ -528,6 +530,7 @@ export default class Review extends View {
 
   /** How the feedback is headed for this kind of review. */
   get framing() {
+    /** @type {import("./types").ReviewKind} */
     const k = this.kind;
     const fb = this.cfg?.prompts?.feedback;
     const labels = fb ? { intro: fb.intro, sections: fb.sections } : undefined;
@@ -554,6 +557,9 @@ export default class Review extends View {
     this.approveMenu = false;
   }
 
+  /** Open the note editor: for `block` (null: a general note), a new `type`, or editing existing `ann`.
+ *  @param {number | null} block @param {import("./types").Annotation["type"]} type
+ *  @param {import("gpui-kit").Context} cx @param {import("./types").Annotation | null} [ann] */
   startEdit(block, type, cx, ann = null) {
     if (this.status !== "open" || type === "choice") return;
     this.editing?.state.release();
@@ -573,6 +579,7 @@ export default class Review extends View {
     cx.timer.after(30, () => state.focus());
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   saveEdit(cx) {
     const e = this.editing;
     if (!e) return;
@@ -593,6 +600,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   cancelEdit(cx) {
     this.editing?.state.release();
     this.editing = null;
@@ -600,6 +608,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {string} id @param {import("gpui-kit").Context} cx */
   remove(id, cx) {
     this.anns = this.anns.filter((a) => a.id !== id);
     if (this.editing?.ann === id) this.cancelEdit(cx);
@@ -608,6 +617,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   useCopied(cx) {
     const e = this.editing;
     if (!e || e.block === null) return;
@@ -622,7 +632,8 @@ export default class Review extends View {
     });
   }
 
-  /** A click on option `label` of the ```choice block `i`: one pick per block (several when it's `choice multi`). */
+  /** A click on option `label` of the ```choice block `i`: one pick per block (several when it's `choice multi`).
+ *  @param {number} i @param {string} label @param {import("gpui-kit").Context} cx */
   pickOption(i, label, cx) {
     if (this.status !== "open") return;
     const b = this.blocks[i];
@@ -639,6 +650,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   toggleSide(cx) {
     this.side = this.showSide ? "0" : "1";
     store.set("side", this.side);
@@ -653,6 +665,10 @@ export default class Review extends View {
 
   // ---- decisions -------------------------------------------------------------
 
+  /** Writes decision.json, toasts, and starts the floating window's goodbye. Callers: the decision buttons,
+ *  the choice form and the dismiss command.
+ *  @param {"approve" | "deny" | "dismissed" | "answer"} decision @param {import("gpui-kit").Context} cx
+ *  @param {{ feedback?: string; notes?: string } | { answers: Record<string, string>; notes?: Record<string, string> }} [extra] */
   async decide(decision, cx, extra = {}) {
     if (this.status !== "open") return;
     if (!(await fs.exists(`${this.dir}`))) return;
@@ -684,7 +700,8 @@ export default class Review extends View {
     this.closeSoon(cx);
   }
 
-  /** Send mode: type the feedback into the agent's terminal, then start a fresh round. */
+  /** Send mode: type the feedback into the agent's terminal, then start a fresh round.
+ *  @param {import("gpui-kit").Context} cx */
   send(cx) {
     if (this.status !== "open" || this.mode !== "send" || this.sending) return;
     if (this.editing) this.saveEdit(cx);
@@ -718,7 +735,8 @@ export default class Review extends View {
     });
   }
 
-  /** A choice: send the answers once every question has one. */
+  /** A choice: send the answers once every question has one.
+ *  @param {import("gpui-kit").Context} cx */
   submitChoice(cx) {
     if (this.status !== "open" || !this.choice) return;
     const f = this.choice;
