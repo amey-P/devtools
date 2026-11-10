@@ -9,6 +9,9 @@ import { theme, fonts, notify, closeOverlay } from "herdr";
 import * as core from "./config-core.js";
 import { configDefaults, configPath, readConfig, writeConfig, tint, btn, icon, wash, stopPress, scaler, withFont, Appear, fadeIn, SOFT, QUICK } from "./ui.js";
 
+/** @import { ReviewConfig, Theme } from "./types"
+ *  @import { Color, Element, Context, AsyncContext, KeyEvent } from "gpui-kit" */
+
 const TABS = [["window", "Window"], ["ui", "Appearance"], ["prompts", "Agent text"]];
 const PLACE_LABELS = { float: "Floating", right: "Split right", down: "Split down", tab: "Tab" };
 const ARRIVE_LABELS = { open: "Open it", inbox: "Wait in the inbox" };
@@ -56,11 +59,17 @@ const FONT_LIST_H = 240;
 const FONT_CAP = 200;
 
 const NUMBER_FIELDS = ["window.width", "window.height", "ui.contentWidth", "ui.sidebarWidth"];
+/** Deep-copies a settings value (raw config JSON: nested objects, text arrays, scalars).
+ *  @param {any} v @returns {any} */
 const clone = (v) => JSON.parse(JSON.stringify(v));
+/** Two text settings render the same (core.text joins arrays and fills placeholders).
+ *  @param {import("./types").Text} a @param {import("./types").Text} b @returns {boolean} */
 const sameText = (a, b) => core.text(a) === core.text(b);
 
 export class Settings {
-  /** `overlay`: this floating window's id (closes it), or null when shown inside a review (`onClose` goes back). */
+  /** `overlay`: this floating window's id (closes it), or null when shown inside a review (`onClose` goes back).
+   *  `cx`: the settings view's init context.
+   *  @param {string | null} overlay @param {AsyncContext} cx @param {{ onClose?: (() => void) | null }} [opts] */
   constructor(overlay, cx, { onClose = null } = {}) {
     this.overlay = overlay;
     this.onClose = onClose;
@@ -68,11 +77,15 @@ export class Settings {
     this.appear = new Appear(cx); // the tab body and the font list fade / grow in
     this.tab = "window";
     this.loaded = false;
+    /** @type {Record<string, InputState | TextareaState>} */
     this.inputs = {};       // path → InputState | TextareaState
+    /** @type {Record<string, string>} */
     this.errors = {};       // path → what's wrong with the typed value
     this.fontOpen = false;
+    /** @type {InputState | null} */
     this.fontQuery = null;  // InputState of the font search
     this.closing = false;
+    /** @type {string[]} */
     this.allFonts = [];
     this.filling = false;   // set while fields are filled from the draft (their change events aren't edits)
     // Field states can't be made while rendering: make them all now, fill them once the settings are read.
@@ -91,7 +104,8 @@ export class Settings {
     });
   }
 
-  /** Puts `cfg` in the draft and fills the fields from it. */
+  /** Puts `cfg` in the draft and fills the fields from it.
+   *  @param {ReviewConfig} cfg */
   reset(cfg) {
     this.errors = {};
     this.draft = clone(cfg);
@@ -111,13 +125,18 @@ export class Settings {
 
   get dirty() { return this.loaded && JSON.stringify(this.draft) !== JSON.stringify(this.saved); }
   get errorCount() { return Object.keys(this.errors).length; }
+  /** The draft value at dotted `path`.
+   *  @param {string} path */
   value(path) { return core.get(this.draft, path); }
+  /** @param {string} path */
   isDefault(path) {
     const v = this.value(path), d = core.get(this.defaults, path);
     return typeof d === "string" || Array.isArray(d) ? sameText(v, d) : v === d;
   }
 
-  /** Sets a draft value, or records why it can't be. Text equal to the default's goes back to the default itself. */
+  /** Sets a draft value, or records why it can't be. Text equal to the default's goes back to the default itself.
+   *  `v` is a raw config value until core.problem validates it (the person's typed text, parsed).
+   *  @param {string} path @param {any} v */
   setValue(path, v) {
     const def = core.get(this.defaults, path);
     if ((typeof def === "string" || Array.isArray(def)) && sameText(v, def)) v = clone(def);
@@ -127,7 +146,8 @@ export class Settings {
     core.set(this.draft, path, v);
   }
 
-  /** Back to the default, in the draft and in its field. */
+  /** Back to the default, in the draft and in its field.
+   *  @param {string} path */
   resetField(path) {
     const def = clone(core.get(this.defaults, path));
     this.setValue(path, def);
@@ -143,6 +163,7 @@ export class Settings {
     closeOverlay(this.overlay);
   }
 
+  /** @param {Context} cx */
   async save(cx) {
     if (!this.dirty || this.errorCount) return;
     try {
@@ -156,6 +177,7 @@ export class Settings {
     cx.notify();
   }
 
+  /** @param {KeyEvent} e @param {Context} cx */
   onKey(e, cx) {
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
     if (k === "escape") { if (this.fontOpen) this.fontOpen = false; else this.close(); }
@@ -167,6 +189,7 @@ export class Settings {
 
   // ---- fields ----------------------------------------------------------------
 
+  /** @param {string} path @returns {InputState} */
   numberState(path) {
     const s = InputState.new({});
     s.on("change", (_e, cx) => {
@@ -179,6 +202,7 @@ export class Settings {
     return s;
   }
 
+  /** @param {string} path @returns {TextareaState} */
   textState(path) {
     const multi = path === "prompts.pi.planMode" || path === "prompts.deny" || path === "prompts.approvedWithNotes";
     const s = TextareaState.new({ rows: multi ? 3 : 1 });
@@ -189,6 +213,7 @@ export class Settings {
 
   // ---- view ------------------------------------------------------------------
 
+  /** @param {Theme} [t] @returns {Element} */
   render(t = theme()) {
     const root = v_flex().id("settings").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
@@ -203,7 +228,9 @@ export class Settings {
       .child(this.renderFooter(t));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderHeader(t) {
+    /** @param {string} id @param {string} label @returns {Element} */
     const chip = (id, label) => {
       const on = this.tab === id;
       return h_flex().id(`st-tab-${id}`).h(24).px(10).items_center().rounded(6).text_size(12).font_medium().cursor_pointer()
@@ -227,6 +254,7 @@ export class Settings {
           .children(TABS.map(([id, l]) => chip(id, l)))));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderFooter(t) {
     const n = this.errorCount;
     const status = n ? `${n} field${n === 1 ? "" : "s"} to fix` : this.dirty ? "Unsaved changes" : "Saved";
@@ -234,20 +262,23 @@ export class Settings {
       .on_mouse_down("left", stopPress)
       .child(div().flex_1().text_size(12).text_color(n ? t.blocked : this.dirty ? t.accent : t.dim).child(status))
       .child(btn("st-defaults", t, { label: "Reset all", tooltip: "Put every setting back to its default (then Save)",
-        onClick: (cx) => { this.reset(core.merge(this.defaults, {})); cx.notify(); } }))
+        onClick: (cx) => { this.reset(/** @type {ReviewConfig} */ (core.merge(this.defaults, {}))); cx.notify(); } }))
       .child(btn("st-revert", t, { label: "Revert", disabled: !this.dirty && !n, tooltip: "Undo the changes since the last save",
         onClick: (cx) => { this.reset(this.saved); cx.notify(); } }))
       .child(btn("st-save", t, { ic: "check", label: "Save", variant: "solid", color: t.accent, kbd: "⌘S", disabled: !this.dirty || n > 0,
         onClick: (cx) => { cx.spawn(async (cx) => this.save(cx)); } }));
   }
 
+  /** @param {Theme} t @param {string} title @param {string} [note] @returns {Element} */
   section(t, title, note) {
     return v_flex().pt(14).pb(4).gap(2)
       .child(div().text_size(10.5).font_semibold().text_color(t.accent).child(title.toUpperCase()))
       .when(!!note, (el) => el.child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(note)));
   }
 
-  /** A setting: its label and hint on the left, `control` on the right (or below, `stacked`). */
+  /** A setting: its label and hint on the left, `control` on the right (or below, `stacked`).
+   *  @param {Theme} t @param {string} path @param {string} label @param {string} hint @param {Element} control
+   *  @param {{ stacked?: boolean }} [opts] @returns {Element} */
   row(t, path, label, hint, control, { stacked = false } = {}) {
     const err = this.errors[path];
     const changed = !this.isDefault(path);
@@ -264,6 +295,7 @@ export class Settings {
     return wrap.child(text).child(stacked ? control : div().flex_none().child(control));
   }
 
+  /** @param {Theme} t @param {string} path @param {Record<string, string>} labels @returns {Element} */
   segmented(t, path, labels) {
     const cur = this.value(path);
     return h_flex().p(3).gap(2).rounded(8).bg(t.surface).border_1().border_color(t.border)
@@ -277,6 +309,7 @@ export class Settings {
       }));
   }
 
+  /** @param {Theme} t @param {string} path @returns {Element} */
   toggle(t, path) {
     const on = !!this.value(path);
     return div().id(`st-${path}`).relative().w(34).h(20).rounded_full().cursor_pointer()
@@ -285,17 +318,20 @@ export class Settings {
       .child(div().id(`st-${path}-knob`).absolute().top(2).left(on ? 16 : 2).transition("left", SOFT).w(14).h(14).rounded_full().bg(on ? t.background : t.muted));
   }
 
+  /** @param {Theme} t @param {string} path @param {string} unit @returns {Element} */
   number(t, path, unit) {
     const err = !!this.errors[path];
     return h_flex().gap(6).items_center()
-      .child(Input.new(this.inputs[path]).w(96).h(28).px(8).items_center().rounded(7).border_1()
+      .child(Input.new(/** @type {InputState} */ (this.inputs[path])).w(96).h(28).px(8).items_center().rounded(7).border_1()
         .border_color(err ? t.blocked : t.input ?? t.border).bg(t.background).text_size(13))
       .when(!!unit, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(unit)));
   }
 
-  /** A size stepper; 0 means the theme's size, and stepping from it starts at `from`. */
+  /** A size stepper; 0 means the theme's size, and stepping from it starts at `from`.
+   *  @param {Theme} t @param {string} path @param {number} lo @param {number} hi @param {number} [from] @returns {Element} */
   stepper(t, path, lo, hi, from = 13) {
     const v = this.value(path);
+    /** @param {number} d @returns {(cx: Context) => void} */
     const step = (d) => (cx) => { this.setValue(path, Math.min(hi, Math.max(lo, (v || from) + d))); cx.notify(); };
     return h_flex().gap(4).items_center()
       .child(btn(`st-${path}-dn`, t, { label: "−", variant: "outline", disabled: v > 0 && v <= lo, onClick: step(-1) }))
@@ -303,6 +339,7 @@ export class Settings {
       .child(btn(`st-${path}-up`, t, { label: "+", variant: "outline", disabled: v >= hi, onClick: step(1) }));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderWindow(t) {
     return v_flex()
       .child(this.section(t, "Where reviews open", "Agents can still ask for a place per review, and $HERDR_REVIEW_PLACE overrides this for a session."))
@@ -316,6 +353,7 @@ export class Settings {
       .child(this.row(t, "window.height", "Height", "", this.number(t, "window.height", "px or 0–1")));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderUi(t) {
     return v_flex()
       .child(this.section(t, "Text"))
@@ -330,6 +368,7 @@ export class Settings {
       .child(this.row(t, "ui.readingTime", "Reading time", "The “N min read” above the document.", this.toggle(t, "ui.readingTime")));
   }
 
+  /** @param {Theme} t @returns {Element} */
   fontPicker(t) {
     const cur = this.value("ui.font");
     const button = h_flex().id("st-font").h(28).px(10).gap(8).items_center().rounded(7).border_1().border_color(this.fontOpen ? t.accent : t.border)
@@ -346,6 +385,7 @@ export class Settings {
     const q = (this.fontQuery?.value() ?? "").trim().toLowerCase();
     const matches = this.allFonts.filter((f) => !q || f.toLowerCase().includes(q));
     const shown = matches.slice(0, FONT_CAP);
+    /** @param {string} name @param {string} [label] @returns {Element} */
     const item = (name, label) => {
       const on = (cur || "") === name;
       return h_flex().id(`st-font-${name || "default"}`).h(28).px(10).items_center().rounded(6).cursor_pointer().text_size(13)
@@ -379,6 +419,7 @@ export class Settings {
           .child(Scrollbar.vertical("st-font-list").absolute().inset_0())));
   }
 
+  /** @param {Theme} t @returns {Element} */
   preview(t) {
     const sz = scaler(this.draft);
     return withFont(v_flex().my(8).p(14).gap(6).rounded(10).bg(t.background).border_1().border_color(t.border), this.draft)
@@ -389,6 +430,7 @@ export class Settings {
       .child(div().text_size(sz(12)).italic().text_color(t.muted).child("“…the quoted text of an annotation”"));
   }
 
+  /** @param {Theme} t @returns {Element} */
   renderPrompts(t) {
     if (!this.defaults?.prompts) {
       return div().py(30).text_center().text_size(13).text_color(t.dim).whitespace_normal()
@@ -400,7 +442,7 @@ export class Settings {
       .children(PROMPTS.map(([title, fields]) => v_flex()
         .child(this.section(t, title))
         .children(fields.map(([path, label, hint]) => this.row(t, path, label, hint,
-          Textarea.new(this.inputs[path]).w_full().p(8).rounded(7).border_1()
+          Textarea.new(/** @type {TextareaState} */ (this.inputs[path])).w_full().p(8).rounded(7).border_1()
             .border_color(this.errors[path] ? t.blocked : t.input ?? t.border).bg(t.background).text_size(12.5),
           { stacked: true })))));
   }
