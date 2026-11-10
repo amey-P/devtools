@@ -12,22 +12,36 @@
 // AskUserQuestion reports them. Submitting needs every question answered.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, TextView, Input, InputState } from "gpui-base";
+/** @import { Question, Theme } from "./types"
+ *  @import { Context, Element } from "gpui-kit" */
 import { tint, green, icon, kbd, stopPress } from "./ui.js";
+
+/** A saved draft of this form (toDraft()): the picked option indexes per question, the Other/note texts, and
+ *  whether each Other row / note is on. */
+/** @typedef {{ picks?: number[][]; other?: string[]; otherOn?: boolean[]; notes?: string[] }} ChoiceDraft */
+
+/** The per-question render options the review passes down: still taking an answer, the review's text scaler
+ *  (ui.js scaler), and previews stacked under the options when the window is narrow. */
+/** @typedef {{ open: boolean; sz: (n: number) => number; narrow?: boolean }} RenderOpts */
 
 export class ChoiceForm {
   /** `saved`: a draft (toDraft()). `onChange`: called after every change (the review saves the draft). `refocus`: give
    *  the keyboard back to the review (after Enter in a text field). */
-  /** @param {any} questions @param {any} saved @param {{onChange?: () => void, refocus?: (cx?: any) => void}} [opts] */
+  /** @param {Question[]} questions @param {ChoiceDraft | null} saved
+   *  @param {{ onChange?: () => void, refocus?: () => void }} [opts] */
   constructor(questions, saved, { onChange, refocus } = {}) {
     this.qs = Array.isArray(questions) ? questions : [];
     const n = this.qs.length;
+    /** @template T @param {T[] | undefined} v @param {() => T} f @returns {T[]} */
     const arr = (v, f) => Array.from({ length: n }, (_, i) => (Array.isArray(v) && v[i] !== undefined && v[i] !== null ? v[i] : f()));
-    this.picks = arr(saved?.picks, () => []).map((p) => new Set(Array.isArray(p) ? p : []));
+    this.picks = arr(saved?.picks, /** @type {() => number[]} */ (() => [])).map((p) => new Set(Array.isArray(p) ? p : []));
     this.other = arr(saved?.other, () => "");
     this.otherOn = arr(saved?.otherOn, () => false);
     this.notes = arr(saved?.notes, () => "");
     this.noteOn = this.notes.map((x) => !!x);
+    /** @type {(InputState | null)[]} */
     this.otherState = new Array(n).fill(null);  // InputState, made on first use (never in render)
+    /** @type {(InputState | null)[]} */
     this.noteState = new Array(n).fill(null);
     this.fq = 0;          // focused question
     this.fo = 0;          // focused option (options.length is "Other…")
@@ -40,11 +54,14 @@ export class ChoiceForm {
     for (const s of [...this.otherState, ...this.noteState]) s?.release();
   }
 
+  /** The draft the review saves (the constructor's `saved`).
+   *  @returns {ChoiceDraft} */
   toDraft() {
     return { picks: this.picks.map((p) => [...p].sort((a, b) => a - b)), other: this.other, otherOn: this.otherOn, notes: this.notes };
   }
 
-  /** The answer to question `i` ("" when none). */
+  /** The answer to question `i` ("" when none).
+   *  @param {number} i @returns {string} */
   answerOf(i) {
     const q = this.qs[i];
     const labels = q.options.filter((_, oi) => this.picks[i].has(oi)).map((o) => o.label);
@@ -56,9 +73,12 @@ export class ChoiceForm {
   get complete() { return this.qs.length > 0 && this.answered === this.qs.length; }
   get firstOpen() { return this.qs.findIndex((_, i) => !this.answerOf(i)); }
 
-  /** What decision.json carries: {answers, notes?}. */
+  /** What decision.json carries: {answers, notes?}.
+   *  @returns {{ answers: Record<string, string>; notes?: Record<string, string> }} */
   result() {
+    /** @type {Record<string, string>} */
     const answers = {};
+    /** @type {Record<string, string>} */
     const notes = {};
     this.qs.forEach((q, i) => {
       answers[q.question] = this.answerOf(i);
@@ -67,13 +87,15 @@ export class ChoiceForm {
     return Object.keys(notes).length ? { answers, notes } : { answers };
   }
 
-  /** One line for toasts and the result card. */
+  /** One line for toasts and the result card.
+   *  @returns {string} */
   summary() {
     return this.qs.map((_, i) => this.answerOf(i)).filter(Boolean).join(" · ");
   }
 
   // ---- changes -----------------------------------------------------------------
 
+  /** @param {number} qi @param {number} oi @param {Context} cx */
   pick(qi, oi, cx) {
     const q = this.qs[qi];
     if (!q) return;
@@ -93,6 +115,7 @@ export class ChoiceForm {
     this.onChange();
   }
 
+  /** @param {number} from */
   advance(from) {
     const n = this.qs.length;
     for (let k = 1; k < n; k++) {
@@ -101,6 +124,7 @@ export class ChoiceForm {
     }
   }
 
+  /** @param {number} qi @param {Context} cx */
   toggleOther(qi, cx) {
     const q = this.qs[qi];
     const on = !this.otherOn[qi];
@@ -113,13 +137,15 @@ export class ChoiceForm {
     this.onChange();
   }
 
+  /** @param {number} qi @param {Context} cx */
   toggleNote(qi, cx) {
     this.noteOn[qi] = !this.noteOn[qi];
     if (this.noteOn[qi]) this.focusField("note", qi, cx);
     else { this.notes[qi] = ""; this.noteState[qi]?.set_value(""); this.refocus(); this.onChange(); }
   }
 
-  /** The text field (made now if it's new: this runs in a handler, not in render) and the keyboard on it. */
+  /** The text field (made now if it's new: this runs in a handler, not in render) and the keyboard on it.
+   *  @param {"other" | "note"} which @param {number} qi @param {Context | undefined} [cx] */
   focusField(which, qi, cx) {
     const states = which === "other" ? this.otherState : this.noteState;
     const values = which === "other" ? this.other : this.notes;
@@ -136,7 +162,8 @@ export class ChoiceForm {
     else s.focus();
   }
 
-  /** A key for the form; true when it was used. `k` is the keystroke with ctrl- read as cmd-. */
+  /** A key for the form; true when it was used. `k` is the keystroke with ctrl- read as cmd-.
+   *  @param {string} k @param {Context} cx @returns {boolean} */
   onKey(k, cx) {
     // Esc in a text field: back to the options (the window stays).
     if (this.typing) { if (k !== "escape") return false; this.typing = false; this.refocus(); return true; }
@@ -159,11 +186,13 @@ export class ChoiceForm {
 
   // ---- view --------------------------------------------------------------------
 
-  /** `open`: the review still takes an answer. `sz`: the review's text scaler. `narrow`: previews go under the options. */
+  /** `open`: the review still takes an answer. `sz`: the review's text scaler. `narrow`: previews go under the options.
+   *  @param {Theme} t @param {RenderOpts} opts @returns {Element} */
   render(t, { open, sz, narrow }) {
     return v_flex().w_full().gap(14).children(this.qs.map((q, qi) => this.renderQuestion(q, qi, t, { open, sz, narrow })));
   }
 
+  /** @param {Question} q @param {number} qi @param {Theme} t @param {RenderOpts} opts @returns {Element} */
   renderQuestion(q, qi, t, { open, sz, narrow }) {
     const focused = open && qi === this.fq;
     const answer = this.answerOf(qi);
@@ -195,6 +224,8 @@ export class ChoiceForm {
       .child(this.renderNote(qi, t, { open, sz }));
   }
 
+  /** @param {Question} q @param {number} qi @param {Question["options"][number]} o @param {number} oi
+   *  @param {Theme} t @param {RenderOpts} opts @returns {Element} */
   renderOption(q, qi, o, oi, t, { open, sz }) {
     const picked = this.picks[qi].has(oi);
     const focused = open && qi === this.fq && oi === this.fo;
@@ -211,6 +242,7 @@ export class ChoiceForm {
       .when(open && oi < 9, (el) => el.child(div().pt(1).child(kbd(String(oi + 1), t.dim))));
   }
 
+  /** @param {Question} q @param {number} qi @param {Theme} t @param {RenderOpts} opts @returns {Element} */
   renderOther(q, qi, t, { open, sz }) {
     const on = this.otherOn[qi];
     const oi = q.options.length;
@@ -236,6 +268,7 @@ export class ChoiceForm {
     return v_flex().w_full().gap(6).child(row).when(!!field, (el) => el.child(field));
   }
 
+  /** @param {number} qi @param {Theme} t @param {RenderOpts} opts @returns {Element} */
   renderNote(qi, t, { open, sz }) {
     const on = this.noteOn[qi];
     const s = this.noteState[qi];
@@ -260,7 +293,8 @@ export class ChoiceForm {
         .on_click((_e, cx) => { this.toggleNote(qi, cx); cx.notify(); }).child(icon("trash", 12))));
   }
 
-  /** A radio dot or a checkbox. */
+  /** A radio dot or a checkbox. `multi`: the question's multiSelect (undefined: single choice).
+   *  @param {boolean | undefined} multi @param {boolean} on @param {Theme} t @returns {Element} */
   mark(multi, on, t) {
     const c = t.accent;
     const box = div().w(16).h(16).flex_none().border_1().border_color(on ? c : t.dim).flex().items_center().justify_center();
