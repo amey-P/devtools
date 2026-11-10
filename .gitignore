@@ -5,6 +5,10 @@ node_modules/
 jsconfig.json
 *.d.ts
 !herdr-review/mod/types.d.ts
+!herdr-minimal/space-icons/types.d.ts
+!herdr-sidebar/space-tree/types.d.ts
+!herdr-git/types.d.ts
+!herdr-usage/agent-usage/types.d.ts
 !types/*.d.ts
 .installed.json
 # local agent plans
