@@ -13,7 +13,7 @@ export interface BtnOpts {
   disabled?: boolean;
   active?: boolean;
   tooltip?: string;
-  onClick?: (cx: any) => unknown;
+  onClick?: (cx: import("gpui-kit").Context) => unknown;
   /** The left half of a split button. */
   split?: boolean;
 }
