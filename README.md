@@ -74,7 +74,9 @@ The mods stay plain `.js` (Herdr runs them on QuickJS), with types in JSDoc comm
 ```sh
 npm install                  # once: typescript + @types/node, dev-only
 npm run typecheck            # every mod and the Node scripts
-npm run typecheck -- usage   # only projects whose path contains "usage"
+npm run typecheck -- usage   # only projects whose name contains "usage" (`node`: the Node scripts)
+npm run typecheck -- --by-file   # error counts per file
+node scripts/same-runtime.mjs main   # prove a change touched only comments (JSDoc), not code
 ```
 
 - Each mod folder has a `tsconfig.json` extending `tsconfig.mod.json`; the root `tsconfig.json` covers the Node scripts (`*.mjs`). Editors pick these up, so errors show inline.

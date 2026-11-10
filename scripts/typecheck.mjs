@@ -2,7 +2,9 @@
 // Type-check every mod and the Node scripts with tsc (JSDoc types in plain .js; see tsconfig.mod.json).
 //
 //   npm run typecheck              every project
-//   npm run typecheck -- review    only projects whose path contains "review"
+//   npm run typecheck -- review    only projects whose name contains "review"
+//   npm run typecheck -- node      only the Node scripts (the root project)
+//   npm run typecheck -- --by-file [filter]   error counts per file instead of every error
 //
 // A mod is a folder with a tsconfig.json next to a main.js. Its gpui-kit.d.ts (the types of Herdr's
 // built-in modules) is regenerated first with `herdr-app check`, from the Herdr that's installed, so it
@@ -14,7 +16,9 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TSC = join(ROOT, "node_modules", ".bin", "tsc");
-const filter = process.argv[2] ?? "";
+const args = process.argv.slice(2);
+const byFile = args.includes("--by-file");
+const filter = args.find((a) => !a.startsWith("--")) ?? "";
 
 /** Folders under `dir` holding both a tsconfig.json and a main.js. @param {string} dir @returns {string[]} */
 function findMods(dir) {
@@ -36,10 +40,12 @@ if (!existsSync(TSC)) {
 const hasHerdr = spawnSync("herdr-app", ["--version"], { stdio: "ignore" }).status === 0;
 if (!hasHerdr) console.warn("warn: herdr-app not on PATH; using whatever gpui-kit.d.ts files are already there.\n");
 
-const projects = [...findMods(ROOT), ROOT].filter((p) => relative(ROOT, p).includes(filter));
+/** A project's name: its folder, or "node scripts (*.mjs)" for the root. @param {string} dir */
+const nameOf = (dir) => relative(ROOT, dir) || "node scripts (*.mjs)";
+const projects = [...findMods(ROOT), ROOT].filter((p) => nameOf(p).includes(filter));
 let failed = 0;
 for (const dir of projects) {
-  const name = relative(ROOT, dir) || "node scripts (*.mjs)";
+  const name = nameOf(dir);
   if (dir !== ROOT && hasHerdr) spawnSync("herdr-app", ["check", dir], { stdio: "ignore" });
   if (dir !== ROOT && !existsSync(join(dir, "gpui-kit.d.ts"))) {
     console.log(`✗ ${name}: no gpui-kit.d.ts (run \`herdr-app check ${relative(ROOT, dir)}\`)`);
@@ -53,7 +59,11 @@ for (const dir of projects) {
   failed++;
   const untyped = lines.filter((l) => /error TS70\d\d/.test(l)).length;
   console.log(`✗ ${name}: ${lines.length} errors (${untyped} untyped, ${lines.length - untyped} other)`);
-  for (const l of lines) console.log("    " + l);
+  if (!byFile) { for (const l of lines) console.log("    " + l); continue; }
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const l of lines) { const f = l.slice(0, l.indexOf("(")); counts.set(f, (counts.get(f) ?? 0) + 1); }
+  for (const [f, n] of [...counts].sort((a, b) => b[1] - a[1])) console.log(`    ${String(n).padStart(4)}  ${f}`);
 }
 console.log(failed ? `\n${failed} of ${projects.length} projects have errors.` : `\nAll ${projects.length} projects pass.`);
 process.exit(failed ? 1 : 0);
