@@ -53,10 +53,13 @@ import { ChoiceForm } from "./choice.js";
 
 const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST", choice: "DECISION" };
 const MARKDOWN = /\.(md|mdx|markdown|txt|text)$/i;
+/** The directory part of path `f`. @param {string} f @returns {string} */
 const dirOf = (f) => f.replace(/[\\/][^\\/]*$/, "") || "/";
+/** `~/…` → the home directory; null/undefined pass through. @param {string | null | undefined} f @returns {string | null | undefined} */
 const expand = (f) => (f && f.startsWith("~/") ? home() + f.slice(1) : f);
 
-/** Non-markdown files (code, logs) become fenced chunks, one per blank-line-separated run, so each is annotatable. */
+/** Non-markdown files (code, logs) become fenced chunks, one per blank-line-separated run, so each is annotatable.
+ *  @param {string} text @param {string | null} file @returns {string} */
 function asMarkdown(text, file) {
   if (!file || MARKDOWN.test(file)) return text;
   const ext = (/\.([\w+-]+)$/.exec(file)?.[1] ?? "").toLowerCase();
@@ -76,6 +79,7 @@ const PILL = { width: 340, height: 40 };
 const ENTER = { duration: 240, easing: "ease-out" };
 
 export default class Review extends View {
+  /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx */
   init(_props, cx) {
     const p = props() ?? {};
     // The settings as their own floating window (settings.js).
@@ -115,18 +119,21 @@ export default class Review extends View {
     this.sending = false;
     this.req = null;
     this.error = null;
+    /** @type {import("./types").Block[]} */
     this.blocks = [];
     /** @type {import("./types").Annotation[]} */
     this.anns = [];
     this.status = "loading";   // loading | open | sent | cancelled
     this.sent = null;          // the decision this pane wrote or found
     this.editing = null;       // {ann: id | null, block, type, quote, state}
+    /** @type {number} */
     this.hovered = -1;
     this.selected = null;      // annotation id picked in the sidebar
     this.approveMenu = false;  // the Approve ▾ menu (approve with notes / discard them) is open
     this.editSeq = 0;          // each editor that opens is new (it fades in)
     this.width = 0;
     this.seq = 0;
+    /** @type {string | null} */
     this.side = store.get("side"); // "1" | "0" | null (null: open when wide)
     this.sideTab = "notes";    // notes | preview
     this.lastKey = 0;          // dedupes a chord that reaches us twice (key handler + bound command)
@@ -167,11 +174,13 @@ export default class Review extends View {
     cx.timer.every(60000, (cx) => { if (this.status === "open") cx.notify(); });
   }
 
-  /** The launcher: opens what the bridge queued (or the reply review), then closes itself. */
+  /** The launcher: opens what the bridge queued (or the reply review), then closes itself.
+ *  @param {string} self @param {import("gpui-kit").AsyncContext} cx */
   async runLauncher(self, cx) {
     const cfg = await readConfig();
     const spool = `${appHome()}/data/review`;
     const queue = `${spool}/.float`;
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(queue)).filter(isReviewId); } catch {}
     const size = { width: cfg.window.width, height: cfg.window.height };
@@ -180,6 +189,7 @@ export default class Review extends View {
       try { await fs.unlink(`${queue}/${id}`); } catch { continue; } // another launcher took it
       const req = await readJson(`${spool}/${id}/request.json`);
       if (!req) continue;
+      /** Writes the launch meta for the bridge. @param {Record<string, unknown>} m @returns {Promise<void>} */
       const meta = (m) => fs.writeFile(`${spool}/${id}/meta.json`, JSON.stringify(m)).catch(() => {});
       if (cfg.window.arrive === "inbox") {
         // Quiet arrival: a toast, and the review waits in the inbox until it's opened.
@@ -211,7 +221,8 @@ export default class Review extends View {
     closeOverlay(self);
   }
 
-  /** Opens (or refreshes, in place) the arrival pill, centred at the top of the window. */
+  /** Opens (or refreshes, in place) the arrival pill, centred at the top of the window.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   async openPill(cx) {
     await Promise.race([this.sized, new Promise((r) => cx.timer.after(300, () => r()))]);
     const w = this.winSize?.width ?? 1200;
@@ -224,6 +235,7 @@ export default class Review extends View {
   async recordOwnPane() {
     const meta = await readJson(`${this.dir}/meta.json`);
     if (!meta?.opening || meta.pane) return;
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(spool())).filter((n) => isReviewId(n) && n !== this.id); } catch {}
     const claimed = new Set((await Promise.all(ids.map((n) => readJson(`${spool()}/${n}/meta.json`)))).map((m) => m?.pane).filter(Boolean));
