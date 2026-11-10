@@ -14,12 +14,17 @@
 // --text prints them as a markdown list instead.
 // Exit: 0 answered · 1 usage / bad spec · 2 dismissed (or interrupted) · 3 not inside the Herdr app.
 // Closing the window only puts the question off (it waits in the inbox, ctrl-shift-i): this keeps waiting.
+/** @import { Place } from "../types.js" */
+
 import { readFileSync } from "node:fs";
 import { askChoice, answersText, normalizeQuestions } from "./bridge.mjs";
 import { PLACES } from "./config.mjs";
 
 const USAGE = "usage: ask.mjs \"question\" -o A -o B [--multi] [--header H] | ask.mjs <spec.json | ->   [--title T] [--place float|right|down|tab] [--text]\n";
+/** @param {number} code */
 const usage = (code) => { process.stderr.write(USAGE); process.exit(code); };
+
+/** @param {string} msg */
 const fail = (msg) => { process.stderr.write(`ask: ${msg}\n`); process.exit(1); };
 
 const args = process.argv.slice(2);
@@ -32,7 +37,9 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--multi" || a === "-m") multi = true;
   else if (a === "--header") header = val();
   else if (a === "--title" || a === "-t") title = val();
-  else if (a === "--place" || a === "-p") { place = val(); if (!PLACES.includes(place)) usage(1); }
+  // The one place assignment: the check on this line makes the stored value a place, so `place` stays
+  // Place | null all the way into the askChoice() call (null = "use the settings").
+  else if (a === "--place" || a === "-p") { place = /** @type {Place} */ (val()); if (!PLACES.includes(place)) usage(1); }
   else if (a === "--text") asText = true;
   else if (a === "-h" || a === "--help") usage(0);
   else if (src === null) src = a;

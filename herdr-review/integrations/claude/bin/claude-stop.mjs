@@ -1,5 +1,9 @@
 // Claude Code Stop hook: remember Claude's last reply so the Herdr review pane can open it
 // (ctrl-shift-r beside the agent). Inside herdr-app terminals only; prints nothing, never blocks.
+/** Claude's stdin payload for a Stop hook: what the assistant just said, and Claude's transcript JSONL, where
+ *  the full conversation (and so the last reply, past the tool blocks) is read from. */
+/** @typedef {{ last_assistant_message?: string; transcript_path?: string }} ClaudeStopHook */
+
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -11,10 +15,12 @@ const bridgePath = join(appHome, "mods", "review", "bin", "bridge.mjs");
 
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
+/** @type {ClaudeStopHook} */
 let hook = {};
 try { hook = JSON.parse(input); } catch { process.exit(0); }
 
-/** The assistant text written since the last prompt the person typed. */
+/** The assistant text written since the last prompt the person typed.
+ *  @param {string} path @returns {string} */
 function fromTranscript(path) {
   let lines;
   try { lines = readFileSync(path, "utf8").split("\n"); } catch { return ""; }

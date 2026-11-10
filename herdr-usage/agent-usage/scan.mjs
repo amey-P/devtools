@@ -30,6 +30,37 @@ import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+/** @import { Limits, LimitWindow, ProviderUsage, ScanResult, Totals } from "./types.js" */
+
+// One session-log line, parsed into: [day, model, in, out, cacheWrite5m, cacheWrite1h, cacheRead, cost|null, dedupeKey|null].
+/** @typedef {[string, string, number, number, number, number, number, number | null, string | null]} Rec */
+// Codex's per-window rate limits, as reported in event lines (raw API fields, optional until checked).
+/** @typedef {{ used_percent?: number, window_minutes?: number, resets_at?: number, resets_in_seconds?: number }} CodexRLWin */
+/** st.limits for codex: the API's rate_limits object plus the timestamp it was seen at. */
+/** @typedef {{ at: string, primary?: CodexRLWin, secondary?: CodexRLWin, plan_type?: string }} CodexRL */
+/** What a provider's per-file state (st) accumulates across parse() calls. */
+/** @typedef {{ model?: string, limits?: CodexRL }} FileState */
+/** One cache entry for a session file: provider key, inode, bytes consumed, records kept, st. */
+/** @typedef {{ p: string, ino: number, off: number, recs: Rec[], st: FileState }} FileEnt */
+/** The scan cache in ~/.cache/herdr-agent-usage/scan.json. */
+/** @typedef {{ v: number, files: Record<string, FileEnt>, services: Record<string, { at: string, limits: Limits }> }} Cache */
+/** One services.json entry as scan.mjs reads it: `key` is all it requires. */
+/** @typedef {{ key: string, label?: string, icon?: string, brand?: string, program?: string, enabled?: boolean, apps?: string[] }} ServiceEntry */
+/** A provider: log providers read dirs/ with parse(); the api provider (opencode-go) fetches from limits(). */
+/** @typedef {{ dirs?: string[], parse?: (o: any, st: FileState) => Rec | null, api?: boolean, limits?: () => Promise<Limits> }} ProviderDef */
+/** [session file, its stat] pairs, as walk() returns them. */
+/** @typedef {[string, import("node:fs").Stats][]} FileHits */
+/** Claude Code's stored OAuth credential (.claudeAiOauth in .credentials.json / the Keychain). */
+/** @typedef {{ accessToken: string, expiresAt?: number, subscriptionType?: string }} Credential */
+/** One api.anthropic.com/api/oauth/usage window (raw API fields). */
+/** @typedef {{ utilization?: number, resets_at?: string }} ClaudeWin */
+/** @typedef {{ five_hour?: ClaudeWin, seven_day?: ClaudeWin, seven_day_opus?: ClaudeWin, seven_day_sonnet?: ClaudeWin }} ClaudeUsage */
+/** One opencode.ai/zen/go/v1/usage window, keyed "rolling"|"weekly"|"monthly". resetsAt: epoch seconds or ISO. */
+/** @typedef {{ percent?: number, resetsAt?: string | number }} GoWin */
+/** @typedef {{ usage?: Record<string, GoWin> }} GoUsage */
+/** What rollup() contributes to one provider's entry. */
+/** @typedef {Pick<ProviderUsage, "today" | "week" | "daily" | "models" | "estimated">} Rollup */
+
 const HOME = os.homedir();
 const DAYS = 7;
 const KEEP_MS = (DAYS + 1) * 86400_000;
@@ -38,6 +69,7 @@ const CACHE_FILE = path.join(CACHE_DIR, "scan.json");
 const CACHE_VERSION = 2;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+/** @param {string} name @returns {string | null | undefined} */
 function argValue(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : null;
@@ -46,9 +78,12 @@ function argValue(name) {
 // ---------------------------------------------------------------- services
 // Which services to scan: --services a,b when given (the widget's enabled set), else every
 // services.json entry not marked "enabled": false. Without services.json, every known provider.
+/** @param {Set<string> | null} only @returns {ServiceEntry[]} */
 function loadServices(only) {
+  /** @type {ServiceEntry[] | null} */
   let list = null;
   try {
+    /** @type {{ services?: ServiceEntry[] }} */
     const j = JSON.parse(fs.readFileSync(path.join(HERE, "services.json"), "utf8"));
     list = Array.isArray(j.services) ? j.services.filter((s) => s && typeof s.key === "string") : null;
   } catch {}
@@ -59,6 +94,7 @@ function loadServices(only) {
 
 // $ per million tokens: [input, output, cache write 5m, cache write 1h, cache read].
 // First matching prefix wins. Estimates only (API list prices).
+/** @type {Array<[string, [number, number, number, number, number]]>} */
 const PRICES = [
   ["claude-fable", [10, 50, 12.5, 20, 0.25]],
   ["claude-mythos", [10, 50, 12.5, 20, 0.25]],
@@ -74,8 +110,10 @@ const PRICES = [
   ["claude-haiku-5", [0.1, 0.5, 0.125, 0.2, 0.01]],
   ["claude-haiku", [1, 5, 1.25, 2, 0.1]],
 ];
+/** @type {(model: string) => [number, number, number, number, number] | null} */
 const priceFor = (model) => (PRICES.find(([p]) => (model || "").startsWith(p)) || [null, null])[1];
 
+/** @type {(ts: number) => string | null} */
 const dayOf = (ts) => {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return null;
@@ -87,6 +125,7 @@ const dayOf = (ts) => {
 //   [day, model, in, out, cacheWrite5m, cacheWrite1h, cacheRead, cost|null, dedupeKey|null]
 // Codex lines can also carry rate limits (returned via `limits`).
 
+/** @type {Record<string, ProviderDef>} */
 const providers = {
   claude: {
     dirs: [path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME, ".claude"), "projects")],
@@ -141,6 +180,7 @@ const providers = {
 
 // ---------------------------------------------------------------- files
 
+/** @param {string} dir @param {number} cutoff @param {FileHits} out @returns {FileHits} */
 function walk(dir, cutoff, out) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
@@ -154,6 +194,7 @@ function walk(dir, cutoff, out) {
   return out;
 }
 
+/** @param {string} file @param {number} offset @param {number} size @returns {string} */
 function readFrom(file, offset, size) {
   const len = size - offset;
   if (len <= 0) return "";
@@ -170,14 +211,17 @@ function readFrom(file, offset, size) {
   } finally { fs.closeSync(fd); }
 }
 
+/** @returns {Cache} */
 function loadCache() {
   try {
+    /** @type {any} */ // the cache file as raw JSON (type-checked by `v` below)
     const c = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
     if (c.v === CACHE_VERSION) return c;
   } catch {}
   return { v: CACHE_VERSION, files: {}, services: {} };
 }
 
+/** @param {Cache} c @returns {void} */
 function saveCache(c) {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -188,9 +232,11 @@ function saveCache(c) {
 }
 
 // Scans one provider; updates cache.files in place. Returns codex limits if seen.
+/** @param {string} name @param {ProviderDef} prov @param {Cache} cache @param {number} now @returns {CodexRL | null} */
 function scanProvider(name, prov, cache, now) {
   const cutoff = now - KEEP_MS;
   const keepDay = dayOf(cutoff);
+  /** @type {Set<string>} */
   const seen = new Set();
   let limits = null, newestLimitsAt = 0;
   for (const dir of prov.dirs) {
@@ -223,12 +269,17 @@ function scanProvider(name, prov, cache, now) {
   return limits;
 }
 
+/** @param {string} name @param {Cache} cache @param {number} now @returns {Rollup} */
 function rollup(name, cache, now) {
+  /** @type {string[]} */
   const days = [];
   for (let i = DAYS - 1; i >= 0; i--) days.push(dayOf(now - i * 86400_000));
   const byDay = Object.fromEntries(days.map((d) => [d, { in: 0, out: 0, cw: 0, cr: 0, cost: 0, msgs: 0 }]));
+  /** @type {Record<string, { tokens: number, cost: number }>} */
   const models = {};
+  /** @type {Map<string, Rec>} */
   const latest = new Map(); // dedupe: last record per key wins (streamed lines repeat usage)
+  /** @type {Rec[]} */
   const plain = [];
   for (const ent of Object.values(cache.files)) {
     if (ent.p !== name) continue;
@@ -249,9 +300,10 @@ function rollup(name, cache, now) {
     const m = (models[model] ??= { tokens: 0, cost: 0 });
     m.tokens += i + o + w5 + w1 + cr; m.cost += c;
   }
+  /** @type {(list: string[]) => Totals} */
   const total = (list) => list.reduce((a, d) => {
     const b = byDay[d];
-    for (const k of Object.keys(a)) a[k] += b[k];
+    for (const k of /** @type {(keyof Totals)[]} */ (Object.keys(a))) a[k] += b[k];
     return a;
   }, { in: 0, out: 0, cw: 0, cr: 0, cost: 0, msgs: 0 });
   const top = Object.entries(models).sort((a, b) => b[1].tokens - a[1].tokens).slice(0, 4)
@@ -267,11 +319,14 @@ function rollup(name, cache, now) {
 
 // ---------------------------------------------------------------- limits
 
+/** @returns {Credential | null} */
 function claudeCredentials() {
   const base = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, ".claude");
+  /** @type {(t: string) => Credential | null} */
   const tryParse = (t) => { try { return JSON.parse(t)?.claudeAiOauth ?? null; } catch { return null; } };
   // Claude Code keeps its live token in the macOS Keychain; the file can be a
   // stale leftover. Use whichever copy expires last.
+  /** @type {(Credential | null)[]} */
   const found = [];
   try { found.push(tryParse(fs.readFileSync(path.join(base, ".credentials.json"), "utf8"))); } catch {}
   if (process.platform === "darwin") {
@@ -283,6 +338,7 @@ function claudeCredentials() {
   return found.filter((c) => c?.accessToken).sort((a, b) => (b.expiresAt || 0) - (a.expiresAt || 0))[0] ?? null;
 }
 
+/** @returns {Promise<Limits>} */
 async function claudeLimits() {
   const c = claudeCredentials();
   if (!c?.accessToken) return { state: "signed-out" };
@@ -299,9 +355,12 @@ async function claudeLimits() {
     });
     if (res.status === 401) return { state: "stale", plan };
     if (!res.ok) return { state: "error", plan, error: `HTTP ${res.status}` };
-    const j = await res.json();
+    /** @type {ClaudeUsage} */
+    const j = /** @type {ClaudeUsage} */ (await res.json());
+    /** @type {(w: ClaudeWin | undefined, label: string, minutes: number) => LimitWindow | null} */
     const win = (w, label, minutes) => (w && typeof w.utilization === "number")
       ? { label, pct: w.utilization, resets_at: w.resets_at || null, minutes } : null;
+    /** @type {LimitWindow[]} */
     const windows = [
       win(j.five_hour, "5h", 300),
       win(j.seven_day, "week", 10080),
@@ -314,8 +373,10 @@ async function claudeLimits() {
   }
 }
 
+/** @param {CodexRL | null} rl @returns {(Limits & { as_of: string }) | null} */
 function codexLimits(rl) {
   if (!rl) return null;
+  /** @type {(w: CodexRLWin | undefined, fallback: string) => LimitWindow | null} */
   const win = (w, fallback) => {
     if (!w || typeof w.used_percent !== "number") return null;
     const m = w.window_minutes || 0;
@@ -350,8 +411,10 @@ function goApiKey() {
   return null;
 }
 
+/** @type {[string, string, number][]} */
 const GO_WINDOWS = [["rolling", "5h", 300], ["weekly", "week", 10080], ["monthly", "month", 43200]];
 
+/** @returns {Promise<Limits>} */
 async function goLimits() {
   const key = goApiKey();
   if (!key) return { state: "signed-out" };
@@ -362,8 +425,11 @@ async function goLimits() {
     });
     if (res.status === 401) return { state: "stale" };
     if (!res.ok) return { state: "error", error: `HTTP ${res.status}` };
-    const j = await res.json();
+    /** @type {GoUsage} */
+    const j = /** @type {GoUsage} */ (await res.json());
+    /** @type {Record<string, GoWin>} */
     const u = j?.usage ?? {};
+    /** @type {LimitWindow[]} */
     const windows = GO_WINDOWS.flatMap(([name, label, minutes]) => {
       const w = u[name];
       if (!w || typeof w.percent !== "number") return [];
@@ -380,6 +446,7 @@ async function goLimits() {
 
 // ---------------------------------------------------------------- main
 
+/** @returns {Promise<void>} */
 async function main() {
   const wantLimits = process.argv.includes("--limits");
   if (process.argv.includes("--reset-cache")) {
@@ -391,7 +458,9 @@ async function main() {
   const now = Date.now();
   const cache = loadCache();
   cache.services ??= {};
+  /** @type {ScanResult} */
   const out = { at: new Date(now).toISOString(), providers: {} };
+  /** @type {{ v?: CodexRL | null }} */
   const codexRL = {};
   for (const svc of loadServices(only)) {
     const prov = providers[svc.key];
