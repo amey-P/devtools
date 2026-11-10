@@ -1,21 +1,37 @@
 // Shared by the review (main.js) and the inbox (inbox.js): theme helpers, small widgets, config, spool reads.
+/** @import { Theme, ReviewConfig, ReviewRequest, ReviewRecord, ReviewState } from "./types"
+ *  @import { Color, Element, Path, Context, MouseButtonEvent } from "gpui-kit" */
 import { div, svg, PathBuilder, Background } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { appHome, openOverlay, agents, run } from "herdr";
 import * as core from "./config-core.js";
 export const ICONS = "mods/review/icons";
+/** Display names by agent app. Looked up with any app name, so a miss is undefined. @type {Record<string, string | undefined>} */
 export const AGENT_NAMES = { claude: "Claude Code", "claude-code": "Claude Code", pi: "pi", codex: "Codex" };
-export const base = (f) => (f ?? "").split(/[\\/]/).pop();
+/** Last path segment of `f` (a file path; null/undefined give ""). `split` always yields at least one
+ *  element, so the pop is always a string — the callers (main.js fillText vars) need one.
+ *  @param {string | null | undefined} f @returns {string} */
+export const base = (f) => /** @type {string} */ ((f ?? "").split(/[\\/]/).pop());
+/** @param {string} s @returns {string} */
 export const safe = (s) => String(s).replace(/[^\w.-]/g, "_");
 
-// Approve / replacement green: the theme's ANSI green (its `done` is blue in some themes).
+/** Approve / replacement green: the theme's ANSI green (its `done` is blue in some themes).
+ *  @param {Theme} t @returns {Color} */
 export const green = (t) => t.ansi2 ?? t.done;
 
-export const tint = (c, a) => (/^#[0-9a-f]{6}$/i.test(c) ? c + a : c);
+/** Appends alpha `a` to a hex color (non-hex colors pass through untouched).
+ *  @param {Color} c @param {string} a @returns {Color} */
+export const tint = (c, a) => (/^#[0-9a-f]{6}$/i.test(c) ? /** @type {Color} */ (c + a) : c);
+/** @param {string} s @param {number} n @returns {string} */
 export const clip = (s, n) => { const o = s.replace(/\s+/g, " ").trim(); return o.length > n ? o.slice(0, n - 1) + "…" : o; };
+/** Parses the JSON file at `p` (any JSON value); null when it can't be read or parsed.
+ *  @param {string} p @returns {Promise<any | null>} */
 export const readJson = async (p) => { try { return JSON.parse(await fs.readFile(p, "utf8")); } catch { return null; } };
+/** @param {number} n @param {string} w @returns {string} */
 export const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+/** Rough age of a timestamp, for labels ("3h").
+ *  @param {number} ms @returns {string} */
 export const ago = (ms) => {
   const s = Math.max(0, (Date.now() - ms) / 1000);
   if (s < 45) return "just now";
@@ -26,6 +42,7 @@ export const ago = (ms) => {
 // ---- settings (config-core.js has the rules; bin/config.mjs reads the same files for node) -----------------
 
 // Only if config.defaults.json can't be read: enough to open a window.
+/** @type {ReviewConfig} */
 const FALLBACK = { window: { place: "float", width: 0.6, height: 0.8, focus: true, arrive: "open" },
   ui: { font: "", textSize: 0, contentWidth: 860, sidebarWidth: 320, sidebar: "auto", readingTime: true }, prompts: null };
 // Read on every call, never cached: in the Herdr runtime a task spawned in a new window's init stalls forever if its
@@ -37,12 +54,14 @@ export async function configDefaults() {
 export const configPath = () => `${appHome()}/data/review/config.json`;
 /** config.json as written (an empty object when missing). */
 export const readConfigFile = async () => (await readJson(configPath())) ?? {};
-/** The settings in effect: {window, ui, prompts} (prompts is null without the defaults file). */
+/** The settings in effect: {window, ui, prompts} (prompts is null without the defaults file).
+ *  @returns {Promise<ReviewConfig>} */
 export async function readConfig() {
   const [d, raw] = await Promise.all([configDefaults(), readConfigFile()]);
-  return core.merge(d, raw);
+  return /** @type {ReviewConfig} */ (core.merge(d, raw));
 }
-/** Saves settings `cfg` (keeping only what differs from the defaults, and keys this version doesn't know). */
+/** Saves settings `cfg` (keeping only what differs from the defaults, and keys this version doesn't know).
+ *  @param {ReviewConfig} cfg */
 export async function writeConfig(cfg) {
   const d = await configDefaults();
   let text = null;
@@ -57,23 +76,32 @@ export async function writeConfig(cfg) {
   return next;
 }
 export const fillText = core.text;
-/** Text sizes scaled by the `ui.textSize` setting: sizes are designed for 13px text; 0 (the default) leaves them. */
+/** Text sizes scaled by the `ui.textSize` setting: sizes are designed for 13px text; 0 (the default) leaves them.
+ *  @param {ReviewConfig | null} cfg @returns {(n: number) => number} */
 export const scaler = (cfg) => { const r = (cfg?.ui?.textSize || 13) / 13; return (n) => Math.round(n * r * 2) / 2; };
-/** Applies `ui.font` to an element (text styles inherit, so everything inside follows). */
+/** Applies `ui.font` to an element (text styles inherit, so everything inside follows).
+ *  @param {Element} el @param {ReviewConfig | null} cfg @returns {Element} */
 export const withFont = (el, cfg) => (cfg?.ui?.font ? el.font_family(cfg.ui.font) : el);
 
 // Stops a press from reaching a floating window's drag (and the root's focus grab).
+/** @param {MouseButtonEvent} _e @param {Context} cx */
 export const stopPress = (_e, cx) => cx.stop_propagation();
 
 export const store = {
+  /** @param {string} k @returns {string | null} */
   get(k) { try { return localStorage.getItem(k) ?? null; } catch { return null; } },
+  /** @param {string} k @param {string} v */
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 
+/** @param {string} name @param {number} [size] @returns {Element} */
 export const icon = (name, size = 14) => svg(`${ICONS}/${name}.svg`).size(size).flex_none();
 
-// A layer that fills its (relative) parent with a gradient: soft washes behind headers and cards.
+/** A full-size rectangle path, for `wash`.
+ *  @returns {Path} */
 export const RECT = () => PathBuilder.fill().move_to("0%", "0%").line_to("100%", "0%").line_to("100%", "100%").line_to("0%", "100%").close().build();
+/** A layer that fills its (relative) parent with a gradient: soft washes behind headers and cards.
+ *  @param {Color} from @param {Color} to @param {number} [angle] @returns {Element} */
 export const wash = (from, to, angle = 90) =>
   window.paint_path(RECT(), Background.linear_gradient(angle, from, to).color_space("oklab")).absolute().top(0).left(0).size_full();
 
@@ -86,14 +114,16 @@ export const SOFT = { duration: 200, easing: "ease-out" };
 export const QUICK = { duration: 140, easing: "ease-out" };
 
 export class Appear {
-  /** `cx`: any context of the view that draws the elements (init's, or a handler's): its tasks redraw that view. */
+  /** `cx`: any context of the view that draws the elements (init's, or a handler's): its tasks redraw that view.
+   *  @param {Context} cx */
   constructor(cx) {
     this.on = new Set();      // keys drawn shown
     this.pending = new Set(); // keys drawn hidden once, shown next frame
     this.acx = null;
     cx.spawn(async (acx) => { this.acx = acx; });
   }
-  /** False the first time `key` is asked about (draw it hidden), true from the next frame on. */
+  /** False the first time `key` is asked about (draw it hidden), true from the next frame on.
+   *  @param {string} key @returns {boolean} */
   is(key) {
     if (this.on.has(key)) return true;
     if (!this.acx) { this.on.add(key); return true; } // no clock yet: just show it
@@ -109,9 +139,11 @@ export class Appear {
     this.pending.add(key);
     return false;
   }
-  /** Already shown, no entrance (e.g. notes restored from a draft). */
+  /** Already shown, no entrance (e.g. notes restored from a draft).
+   *  @param {string} key */
   mark(key) { this.on.add(key); }
-  /** Gone: the next time it's drawn it comes in again. */
+  /** Gone: the next time it's drawn it comes in again.
+   *  @param {string} key */
   forget(key) { this.on.delete(key); this.pending.delete(key); }
 }
 
@@ -121,6 +153,7 @@ export const fadeIn = (el, shown, dy = 6, policy = SOFT) => el.relative().top(sh
   .transition("opacity", policy).transition("top", policy);
 
 // A status dot; `pulse` breathes a halo around it (native loop, no timer).
+/** @param {Color} color @param {boolean} [pulse] @param {number} [size] @returns {Element} */
 export function dot(color, pulse = false, size = 8) {
   return div().relative().flex_none().w(size).h(size)
     .when(pulse, (el) => el.child(div().absolute().top(-3).left(-3).w(size + 6).h(size + 6).rounded_full()
@@ -129,10 +162,12 @@ export function dot(color, pulse = false, size = 8) {
 }
 
 // Round icon badge in a kind's colour.
+/** @param {string} ic @param {Color} color @param {number} [size] @param {number} [isz] @returns {Element} */
 export const badge = (ic, color, size = 22, isz = 12) => div().w(size).h(size).rounded_full().flex_none()
   .bg(tint(color, "24")).border_1().border_color(tint(color, "55")).text_color(color)
   .flex().items_center().justify_center().child(icon(ic, isz));
 
+/** @param {string} text @param {Color} color @returns {Element} */
 export function kbd(text, color) {
   return div().flex_none().h(17).px(4).rounded(4).border_1().border_color(tint(color, "55"))
     .flex().items_center().text_size(10).text_color(color).opacity(0.85).child(text);
@@ -166,7 +201,10 @@ export function btn(id, t, { label, ic, variant = "ghost", color, kbd: k, disabl
 }
 
 /** The right half of a split button (pairs with `btn(..., {split: true})`): a ▾ that opens a menu. The press is the
- *  Popover's (it wraps this as its trigger), so there is no click handler here. */
+ *  Popover's (it wraps this as its trigger), so there is no click handler here.
+ *  @param {string} id @param {Theme} t
+ *  @param {{ variant?: "ghost" | "outline" | "solid"; color?: Color; disabled?: boolean; open?: boolean; tooltip?: string }} opts
+ *  @returns {Element} */
 export function chevron(id, t, { variant = "outline", color, disabled = false, open = false, tooltip }) {
   const c = color ?? t.foreground;
   const fg = variant === "solid" ? t.background : c;
@@ -184,12 +222,15 @@ export function chevron(id, t, { variant = "outline", color, disabled = false, o
 // ---- spool -------------------------------------------------------------------
 
 export const spool = () => `${appHome()}/data/review`;
+/** @param {string} n @returns {boolean} */
 export const isReviewId = (n) => /^(rv|pr)-[\w-]+$/.test(n);
 export const openInboxAction = { name: "mod.open", args: { name: "review-inbox" } };
 
 /** Opens (or reopens) review `id` as a floating window, one spot per agent, and records where it is
  *  so the bridge can close it after a decision. `extra`: more props ({gentle: true}: fade in, leave the keyboard).
- *  Returns the overlay id. */
+ *  Returns the overlay id.
+ *  @param {string} id @param {ReviewRequest | null} req @param {ReviewConfig} cfg
+ *  @param {{ gentle?: boolean }} extra @returns {Promise<string>} */
 export async function openReviewWindow(id, req, cfg, extra = {}) {
   const overlay = openOverlay({ kind: "window", mod: "review", props: { id, float: true, ...extra },
     key: `review-${safe(req?.terminal ?? id)}`, width: cfg.window.width, height: cfg.window.height });
@@ -199,7 +240,9 @@ export async function openReviewWindow(id, req, cfg, extra = {}) {
 
 /** Opens review `id` where the settings say: a floating window, or beside its agent (a split, else a tab in its
  *  space). A split or tab can't report its pane here (run() returns nothing): the review records it itself
- *  (main.js recordOwnPane). `gentle`: fade in and leave the keyboard where it is (and the person where they are). */
+ *  (main.js recordOwnPane). `gentle`: fade in and leave the keyboard where it is (and the person where they are).
+ *  @param {string} id @param {ReviewRequest | null} req @param {ReviewConfig} cfg
+ *  @param {{ gentle?: boolean }} opts @returns {Promise<string | null>} */
 export async function openReviewPlaced(id, req, cfg, { gentle = false } = {}) {
   const props = gentle ? { id, gentle: true } : { id };
   const place = cfg.window.place;
@@ -214,7 +257,8 @@ export async function openReviewPlaced(id, req, cfg, { gentle = false } = {}) {
 
 /** Where review `id` stands, from its spool files (see bin/bridge.mjs):
  *  pending (an agent waits for a decision) · draft (send mode, unsent notes) · open (send mode, nothing unsent)
- *  · approved · changes · answered (a choice) · sent · dismissed · replaced · interrupted. Null when it has no request. */
+ *  · approved · changes · answered (a choice) · sent · dismissed · replaced · interrupted. Null when it has no request.
+ *  @param {string} id @returns {Promise<ReviewRecord | null>} */
 export async function readReview(id) {
   const dir = `${spool()}/${id}`;
   const req = await readJson(`${dir}/request.json`);
@@ -223,6 +267,7 @@ export async function readReview(id) {
   let cancelled = null;
   try { cancelled = (await fs.readFile(`${dir}/cancelled`, "utf8")).trim() || "interrupted"; } catch {}
   const notes = Array.isArray(draft) ? draft.length : 0;
+  /** @type {ReviewState} */
   let state;
   if (decision?.decision === "approve") state = "approved";
   else if (decision?.decision === "answer") state = "answered";

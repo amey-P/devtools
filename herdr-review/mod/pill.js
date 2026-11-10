@@ -5,6 +5,8 @@
 // Click: open the newest one where the settings say (a floating window, or beside its agent: Herdr goes there).
 // ✕: later, they wait in the review inbox. Switching to an item's workspace opens it there quietly.
 // Items that are decided, dismissed or cancelled elsewhere drop out; with none left the pill closes itself.
+/** @import { ReviewRecord } from "./types"
+ *  @import { Context, AsyncContext } from "gpui-kit" */
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
@@ -18,8 +20,12 @@ import {
 const ENTER = { duration: 280, easing: "ease-out" };
 
 export class Pill {
+  /** `overlay`: this frameless window's id (closes it), null when constructed without one.
+   *  `cx`: the pill view's init context.
+   *  @param {string | null} overlay @param {AsyncContext} cx */
   constructor(overlay, cx) {
     this.overlay = overlay;
+    /** @type {ReviewRecord[]} */
     this.items = [];
     this.loaded = false;
     this.appear = new Appear(cx); // the bar draws once hidden, then the native transition brings it in
@@ -56,6 +62,7 @@ export class Pill {
 
   /** Reviews waiting on the pill, newest first. */
   async load() {
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(spool())).filter(isReviewId); } catch {}
     const metas = await Promise.all(ids.map((id) => readJson(`${spool()}/${id}/meta.json`)));
@@ -79,6 +86,8 @@ export class Pill {
 
   close() {}
 
+  /** Opens review `r` where the settings say (quietly when `gentle`).
+   *  @param {ReviewRecord} r @param {boolean} gentle */
   async open(r, gentle) {
     this.items = this.items.filter((x) => x.id !== r.id);
     // openReviewPlaced rewrites meta.json (no more `pill`), so the watcher won't bring it back.
@@ -93,6 +102,8 @@ export class Pill {
     this.closeWindow();
   }
 
+  /** The pill bar. `cx`: the render context.
+   *  @param {Context} cx */
   render(cx) {
     const t = theme();
     const r = this.items[0];
