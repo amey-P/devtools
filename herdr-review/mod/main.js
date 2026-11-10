@@ -53,10 +53,13 @@ import { ChoiceForm } from "./choice.js";
 
 const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST", choice: "DECISION" };
 const MARKDOWN = /\.(md|mdx|markdown|txt|text)$/i;
+/** The directory part of path `f`. @param {string} f @returns {string} */
 const dirOf = (f) => f.replace(/[\\/][^\\/]*$/, "") || "/";
+/** `~/…` → the home directory; null/undefined pass through. @param {string | null | undefined} f @returns {string | null | undefined} */
 const expand = (f) => (f && f.startsWith("~/") ? home() + f.slice(1) : f);
 
-/** Non-markdown files (code, logs) become fenced chunks, one per blank-line-separated run, so each is annotatable. */
+/** Non-markdown files (code, logs) become fenced chunks, one per blank-line-separated run, so each is annotatable.
+ *  @param {string} text @param {string | null} file @returns {string} */
 function asMarkdown(text, file) {
   if (!file || MARKDOWN.test(file)) return text;
   const ext = (/\.([\w+-]+)$/.exec(file)?.[1] ?? "").toLowerCase();
@@ -76,6 +79,7 @@ const PILL = { width: 340, height: 40 };
 const ENTER = { duration: 240, easing: "ease-out" };
 
 export default class Review extends View {
+  /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx */
   init(_props, cx) {
     const p = props() ?? {};
     // The settings as their own floating window (settings.js).
@@ -115,18 +119,21 @@ export default class Review extends View {
     this.sending = false;
     this.req = null;
     this.error = null;
+    /** @type {import("./types").Block[]} */
     this.blocks = [];
     /** @type {import("./types").Annotation[]} */
     this.anns = [];
     this.status = "loading";   // loading | open | sent | cancelled
     this.sent = null;          // the decision this pane wrote or found
     this.editing = null;       // {ann: id | null, block, type, quote, state}
+    /** @type {number} */
     this.hovered = -1;
     this.selected = null;      // annotation id picked in the sidebar
     this.approveMenu = false;  // the Approve ▾ menu (approve with notes / discard them) is open
     this.editSeq = 0;          // each editor that opens is new (it fades in)
     this.width = 0;
     this.seq = 0;
+    /** @type {string | null} */
     this.side = store.get("side"); // "1" | "0" | null (null: open when wide)
     this.sideTab = "notes";    // notes | preview
     this.lastKey = 0;          // dedupes a chord that reaches us twice (key handler + bound command)
@@ -167,11 +174,13 @@ export default class Review extends View {
     cx.timer.every(60000, (cx) => { if (this.status === "open") cx.notify(); });
   }
 
-  /** The launcher: opens what the bridge queued (or the reply review), then closes itself. */
+  /** The launcher: opens what the bridge queued (or the reply review), then closes itself.
+ *  @param {string} self @param {import("gpui-kit").AsyncContext} cx */
   async runLauncher(self, cx) {
     const cfg = await readConfig();
     const spool = `${appHome()}/data/review`;
     const queue = `${spool}/.float`;
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(queue)).filter(isReviewId); } catch {}
     const size = { width: cfg.window.width, height: cfg.window.height };
@@ -180,6 +189,7 @@ export default class Review extends View {
       try { await fs.unlink(`${queue}/${id}`); } catch { continue; } // another launcher took it
       const req = await readJson(`${spool}/${id}/request.json`);
       if (!req) continue;
+      /** Writes the launch meta for the bridge. @param {Record<string, unknown>} m @returns {Promise<void>} */
       const meta = (m) => fs.writeFile(`${spool}/${id}/meta.json`, JSON.stringify(m)).catch(() => {});
       if (cfg.window.arrive === "inbox") {
         // Quiet arrival: a toast, and the review waits in the inbox until it's opened.
@@ -211,7 +221,8 @@ export default class Review extends View {
     closeOverlay(self);
   }
 
-  /** Opens (or refreshes, in place) the arrival pill, centred at the top of the window. */
+  /** Opens (or refreshes, in place) the arrival pill, centred at the top of the window.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   async openPill(cx) {
     await Promise.race([this.sized, new Promise((r) => cx.timer.after(300, () => r()))]);
     const w = this.winSize?.width ?? 1200;
@@ -224,6 +235,7 @@ export default class Review extends View {
   async recordOwnPane() {
     const meta = await readJson(`${this.dir}/meta.json`);
     if (!meta?.opening || meta.pane) return;
+    /** @type {string[]} */
     let ids = [];
     try { ids = (await fs.readdir(spool())).filter((n) => isReviewId(n) && n !== this.id); } catch {}
     const claimed = new Set((await Promise.all(ids.map((n) => readJson(`${spool()}/${n}/meta.json`)))).map((m) => m?.pane).filter(Boolean));
@@ -248,7 +260,8 @@ export default class Review extends View {
     } catch { closeOverlay(this.overlay); }
   }
 
-  /** After a decision, a floating window shows the result for a moment, then goes. */
+  /** After a decision, a floating window shows the result for a moment, then goes.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   closeSoon(cx) {
     if (!this.floating || this.mode !== "decision") return;
     cx.timer.after(1200, () => this.closeWindow());
@@ -267,7 +280,8 @@ export default class Review extends View {
     if (this.status === "open" && this.id) await this.markSeen({ deferred_at: Date.now() });
   }
 
-  /** Records when this review was opened / put off (seen.json, read by the inbox). */
+  /** Records when this review was opened / put off (seen.json, read by the inbox).
+ *  @param {import("./types").Seen} patch @returns {Promise<any>} */
   async markSeen(patch) {
     if (!this.id) return;
     const prev = (await readJson(`${this.dir}/seen.json`)) ?? {};
@@ -286,7 +300,8 @@ export default class Review extends View {
     this.closeWindow();
   }
 
-  /** Let the waiting agent fall back to its own prompt (the old ✕). */
+  /** Let the waiting agent fall back to its own prompt (the old ✕).
+ *  @param {import("gpui-kit").Context} cx */
   dismiss(cx) {
     if (this.status !== "open" || this.mode !== "decision") return;
     if (this.editing) this.saveEdit(cx);
@@ -298,6 +313,7 @@ export default class Review extends View {
 
   // ---- data ------------------------------------------------------------------
 
+  /** @returns {import("./types").ReviewKind} */
   get kind() { return this.req?.kind ?? this.launch?.kind ?? "plan"; }
   get mode() { return this.req?.mode ?? (this.launch ? "send" : "decision"); }
   get file() { return this.req?.file ?? this.launch?.file ?? null; }
@@ -320,7 +336,7 @@ export default class Review extends View {
     return list.find((a) => a.focused)?.address ?? list.sort((a, b) => b.seq - a.seq)[0]?.address ?? null;
   }
 
-  cycleTarget(cx) {
+  cycleTarget(/** @type {import("gpui-kit").Context} */ cx) {
     const list = this.tabAgents;
     if (list.length < 2) return;
     const i = list.findIndex((a) => a.address === this.target);
@@ -363,16 +379,18 @@ export default class Review extends View {
     return "Review";
   }
 
-  /** New text: re-split, and keep annotations anchored to where their quote is now. */
+  /** New text: re-split, and keep annotations anchored to where their quote is now.
+ *  @param {string} text @returns {boolean} */
   setContent(text) {
     if (text === this.text) return false;
+    /** @type {string | undefined} */
     this.text = text;
     this.blocks = splitBlocks(asMarkdown(text, this.file));
     if (this.anns.length) {
       let moved = false;
       this.anns = this.anns.map((a) => {
         if (a.type === "general" || !a.quote) return a;
-        const fits = (i) => i >= 0 && i < this.blocks.length && (this.blocks[i].src.includes(a.quote) || plain(this.blocks[i].src).includes(a.quote));
+        const fits = (/** @type {number} */ i) => i >= 0 && i < this.blocks.length && (this.blocks[i].src.includes(a.quote) || plain(this.blocks[i].src).includes(a.quote));
         if (a.block !== null && fits(a.block)) return a.stale ? { ...a, stale: false } : a;
         // Nearest block that still holds the quote.
         let best = -1;
@@ -387,7 +405,8 @@ export default class Review extends View {
     return true;
   }
 
-  /** Reads the file or the reply again. `manual`: the person asked (always replaces a reply). */
+  /** Reads the file or the reply again. `manual`: the person asked (always replaces a reply).
+ *  @param {import("gpui-kit").Context | null} cx @param {boolean} manual */
   async reloadContent(cx, manual) {
     let text = null;
     if (this.kind === "reply" && !this.id) {
@@ -416,7 +435,8 @@ export default class Review extends View {
     if (this.setContent(text ?? "") || manual) cx?.notify();
   }
 
-  /** Settings saved anywhere (the settings screen, the CLI) apply to this open review. */
+  /** Settings saved anywhere (the settings screen, the CLI) apply to this open review.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   watchConfig(cx) {
     const dir = `${appHome()}/data/review`;
     cx.spawn(async (cx) => {
@@ -434,7 +454,8 @@ export default class Review extends View {
     });
   }
 
-  /** The ⚙ button: the settings screen in place of the document, and back. */
+  /** The ⚙ button: the settings screen in place of the document, and back.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   toggleSettings(cx) {
     // Whichever comes back in (the document or the settings) fades in.
     this.appear.forget("body");
@@ -450,6 +471,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").AsyncContext} cx */
   watchSpool(cx) {
     cx.spawn(async (cx) => {
       for (;;) {
@@ -459,6 +481,7 @@ export default class Review extends View {
     });
   }
 
+  /** @param {import("gpui-kit").AsyncContext} cx */
   watchFile(cx) {
     if (this.launch?.on) {
       cx.timer.every(3000, (cx) => { cx.spawn(async (cx) => this.reloadContent(cx, false)); });
@@ -472,6 +495,8 @@ export default class Review extends View {
     });
   }
 
+  /** Reopens the reply review whenever the agent's reply file changes.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   watchReplies(cx) {
     if (this.id) return;
     const dir = `${appHome()}/data/review/replies`;
@@ -506,6 +531,7 @@ export default class Review extends View {
 
   /** How the feedback is headed for this kind of review. */
   get framing() {
+    /** @type {import("./types").ReviewKind} */
     const k = this.kind;
     const fb = this.cfg?.prompts?.feedback;
     const labels = fb ? { intro: fb.intro, sections: fb.sections } : undefined;
@@ -532,6 +558,9 @@ export default class Review extends View {
     this.approveMenu = false;
   }
 
+  /** Open the note editor: for `block` (null: a general note), a new `type`, or editing existing `ann`.
+ *  @param {number | null} block @param {import("./types").Annotation["type"]} type
+ *  @param {import("gpui-kit").Context} cx @param {import("./types").Annotation | null} [ann] */
   startEdit(block, type, cx, ann = null) {
     if (this.status !== "open" || type === "choice") return;
     this.editing?.state.release();
@@ -551,6 +580,7 @@ export default class Review extends View {
     cx.timer.after(30, () => state.focus());
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   saveEdit(cx) {
     const e = this.editing;
     if (!e) return;
@@ -571,6 +601,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   cancelEdit(cx) {
     this.editing?.state.release();
     this.editing = null;
@@ -578,6 +609,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {string} id @param {import("gpui-kit").Context} cx */
   remove(id, cx) {
     this.anns = this.anns.filter((a) => a.id !== id);
     if (this.editing?.ann === id) this.cancelEdit(cx);
@@ -586,6 +618,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   useCopied(cx) {
     const e = this.editing;
     if (!e || e.block === null) return;
@@ -600,7 +633,8 @@ export default class Review extends View {
     });
   }
 
-  /** A click on option `label` of the ```choice block `i`: one pick per block (several when it's `choice multi`). */
+  /** A click on option `label` of the ```choice block `i`: one pick per block (several when it's `choice multi`).
+ *  @param {number} i @param {string} label @param {import("gpui-kit").Context} cx */
   pickOption(i, label, cx) {
     if (this.status !== "open") return;
     const b = this.blocks[i];
@@ -617,6 +651,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   toggleSide(cx) {
     this.side = this.showSide ? "0" : "1";
     store.set("side", this.side);
@@ -631,6 +666,10 @@ export default class Review extends View {
 
   // ---- decisions -------------------------------------------------------------
 
+  /** Writes decision.json, toasts, and starts the floating window's goodbye. Callers: the decision buttons,
+ *  the choice form and the dismiss command.
+ *  @param {"approve" | "deny" | "dismissed" | "answer"} decision @param {import("gpui-kit").Context} cx
+ *  @param {{ feedback?: string; notes?: string } | { answers: Record<string, string>; notes?: Record<string, string> }} [extra] */
   async decide(decision, cx, extra = {}) {
     if (this.status !== "open") return;
     if (!(await fs.exists(`${this.dir}`))) return;
@@ -662,7 +701,8 @@ export default class Review extends View {
     this.closeSoon(cx);
   }
 
-  /** Send mode: type the feedback into the agent's terminal, then start a fresh round. */
+  /** Send mode: type the feedback into the agent's terminal, then start a fresh round.
+ *  @param {import("gpui-kit").Context} cx */
   send(cx) {
     if (this.status !== "open" || this.mode !== "send" || this.sending) return;
     if (this.editing) this.saveEdit(cx);
@@ -696,7 +736,8 @@ export default class Review extends View {
     });
   }
 
-  /** A choice: send the answers once every question has one. */
+  /** A choice: send the answers once every question has one.
+ *  @param {import("gpui-kit").Context} cx */
   submitChoice(cx) {
     if (this.status !== "open" || !this.choice) return;
     const f = this.choice;
@@ -711,6 +752,8 @@ export default class Review extends View {
     cx.spawn(async (cx) => this.decide("answer", cx, r));
   }
 
+  /** The Approve decision. `mode`: "notes" approves with the notes, "discard" drops them; a bare Approve
+ *  with notes opens the menu. @param {import("gpui-kit").Context} cx @param {"notes" | "discard" | null} [mode] */
   approve(cx, mode = null) {
     if (this.choice) { this.submitChoice(cx); return; }
     if (this.status !== "open" || this.mode !== "decision") return;
@@ -724,6 +767,7 @@ export default class Review extends View {
     cx.spawn(async (cx) => this.decide("approve", cx, notes ? { notes } : {}));
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   deny(cx) {
     if (this.choice) { this.submitChoice(cx); return; }
     if (this.mode === "send") { this.send(cx); return; }
@@ -743,6 +787,7 @@ export default class Review extends View {
     return true;
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   submitKey(cx) {
     if (!this.dedupe()) return;
     if (this.choice) { this.submitChoice(cx); return; }
@@ -750,6 +795,7 @@ export default class Review extends View {
     else if (!this.approveMenu) this.deny(cx);
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   approveKey(cx) {
     if (this.mode !== "decision" || !this.dedupe()) return;
     if (this.choice) { this.submitChoice(cx); return; }
@@ -757,6 +803,7 @@ export default class Review extends View {
     else this.approve(cx);
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   copyFeedback(cx) {
     const md = this.feedback;
     if (!md) return;
@@ -789,10 +836,14 @@ export default class Review extends View {
     };
   }
 
+  /** A block type's color: blocked red for delete, green for replace and choice, accent for general.
+ *  @param {import("./types").Annotation["type"]} type @param {import("./types").Theme} t @returns {import("gpui-kit").Color} */
   color(type, t) {
     return type === "delete" ? t.blocked : type === "replace" || type === "choice" ? green(t) : type === "general" ? t.accent : t.ansi3;
   }
 
+  /** Key handler (on_key_down, and the focus handle's bindings). `e.keystroke` has ctrl- read as cmd-.
+ *  @param {import("gpui-kit").KeyEvent} e @param {import("gpui-kit").Context} cx */
   onKey(e, cx) {
     if (this.settings) return; // the settings screen has its own keys
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
@@ -809,6 +860,7 @@ export default class Review extends View {
     cx.stop_propagation();
   }
 
+  /** @param {import("gpui-kit").Context} cx @returns {import("gpui-kit").Element} */
   render(cx) {
     if (this.launcher) return div().id("launcher").size_full()
       .on_size_change((size) => { if (!this.winSize) { this.winSize = size; this.onSized?.(); } });
@@ -849,10 +901,11 @@ export default class Review extends View {
         .when(!wide && !this.choice, (el) => el.child(div().absolute().top(0).right(0).bottom(0).when(side, (e) => e.shadow_lg()).child(drawer))));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderHeader(t) {
     const p = this.agent?.program;
     const ic = p?.icon
-      ? (p.tint ? svg(p.icon).size(18).flex_none().text_color(p.color ?? t.foreground) : image(p.icon).w(18).h(18).flex_none())
+      ? (p.tint ? svg(p.icon).size(18).flex_none().text_color(/** @type {import("gpui-kit").Color} */ (p.color ?? t.foreground)) : image(p.icon).w(18).h(18).flex_none())
       : div().w(18).h(18).rounded(5).bg(t.accent).flex_none();
     const open = this.status === "open";
     const loading = this.status === "loading";
@@ -861,14 +914,14 @@ export default class Review extends View {
     const d = this.sent?.decision;
     const sendMode = this.mode === "send";
     const plan = this.kind === "plan";
-    const [stColor, stLabel] = loading ? [t.dim, "Loading…"] : open
+    const [stColor, stLabel] = /** @type {[import("gpui-kit").Color, string]} */ (loading ? [t.dim, "Loading…"] : open
       ? (sendMode
         ? (this.sending ? [t.working, "Sending…"]
           : n ? [t.accent, "Ready to send"]
           : this.lastSent ? [green(t), `Sent ${ago(this.lastSent.at)}${ago(this.lastSent.at) === "just now" ? "" : " ago"}`]
           : [t.accent, "Annotate, then send"])
         : [t.accent, this.req?.created && ago(this.req.created) !== "just now" ? `Waiting ${ago(this.req.created)}` : this.choice ? "Waiting for your answer" : "Awaiting your review"])
-      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"];
+      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"]);
     const tabAgents = sendMode && !this.id ? this.tabAgents : [];
     const counts = ["comment", "delete", "replace", "general"].map((k) => [k, this.anns.filter((a) => a.type === k).length]).filter(([, c]) => c);
     return h_flex().id("pr-head").relative().h(64).flex_none().pl(16).pr(10).gap(12).items_center().bg(t.chrome)
@@ -894,8 +947,8 @@ export default class Review extends View {
           .when(!loading, (el) => el.child(div().flex_none().child("·"))
             .child(this.renderParent(t, sendMode, tabAgents, compact)))
           .when(!loading && !compact && counts.length > 0, (el) => el.child(div().flex_none().child("·"))
-            .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(k, t))
-              .child(icon(KINDS[k].icon, 11)).child(String(c)))))
+            .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(/** @type {"comment" | "delete" | "replace" | "general"} */ (k), t))
+              .child(icon(KINDS[/** @type {"comment" | "delete" | "replace" | "general"} */ (k)].icon, 11)).child(String(c)))))
           .when(!!this.choice && open && !compact, (el) => el.child(div().flex_none().child("·"))
             .child(div().flex_none().child(`${this.choice.answered} of ${plural(this.choice.qs.length, "question")} answered`)))
           .when(!this.choice && !n && open && !compact, (el) => el.child(div().flex_none().child("·")).child(div().flex_none().child("No annotations")))))
@@ -927,7 +980,8 @@ export default class Review extends View {
   /** Request changes · Approve, by state (see the top of this file):
    *    writing a note   both wait (dimmed) until it's saved or cancelled
    *    no notes         Approve leads (solid); Request changes is quiet (it starts a global comment)
-   *    notes            Request changes leads (solid, ⌘↵); Approve is "Approve with notes" + ▾ (with notes / discard) */
+   *    notes            Request changes leads (solid, ⌘↵); Approve is "Approve with notes" + ▾ (with notes / discard) *
+ *  @param {import("./types").Theme} t @param {boolean} compact @returns {import("gpui-kit").Element[]} */
   renderDecision(t, compact) {
     const plan = this.kind === "plan";
     const n = this.anns.length;
@@ -947,20 +1001,24 @@ export default class Review extends View {
     const main = btn("pr-approve", t, { ic: "check", label: compact ? okLabel : `${okLabel} with notes`, variant: "outline", color: g, split: true,
       disabled: writing, tooltip: wait ?? `${okLabel}, and send your ${plural(n, "note")} for ${this.agentName} to follow`,
       onClick: (cx) => this.approve(cx, "notes") });
-    const arrow = (open) => chevron("pr-approve-more", t, { color: g, disabled: writing, open, tooltip: writing ? wait : "More ways to approve" });
+    const arrow = (/** @type {boolean} */ open) => chevron("pr-approve-more", t, { color: g, disabled: writing, open, tooltip: writing ? wait : "More ways to approve" });
     if (writing) return [deny, h_flex().flex_none().items_center().child(main).child(arrow(false))];
     const menu = Popover.new("pr-approve-menu").anchor("top_right")
       .open(this.approveMenu)
-      .on_open_change((open, cx) => { this.approveMenu = open; if (!open) this.appear.forget("approve-menu"); cx.notify(); })
+      .on_open_change((/** @type {boolean} */ open, cx) => { this.approveMenu = open; if (!open) this.appear.forget("approve-menu"); cx.notify(); })
       .trigger(arrow(this.approveMenu))
       .content(this.renderApproveMenu(t, okLabel));
     return [deny, h_flex().flex_none().items_center().child(main).child(menu)];
   }
 
+  /** @param {import("./types").Theme} t @param {string} okLabel @returns {import("gpui-kit").Element} */
   renderApproveMenu(t, okLabel) {
     const n = this.anns.length;
     const g = green(t);
     const shown = this.approveMenu && this.appear.is("approve-menu");
+    /** One menu row. `k`: its keystroke, when it has one; `mode`: what approve(cx, mode) gets.
+     *  @param {string} id @param {string} ic @param {import("gpui-kit").Color} color @param {string} title
+     *  @param {string} sub @param {string | null} k @param {"notes" | "discard"} mode */
     const item = (id, ic, color, title, sub, k, mode) => h_flex().id(id).gap(10).px(10).py(8).items_start().rounded(7).cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { this.approveMenu = false; this.approve(cx, mode); })
@@ -984,6 +1042,8 @@ export default class Review extends View {
   }
 
   /** Who asked for this review (or who feedback goes to), and where that agent is. Click: go to it. */
+  /** @param {import("./types").Theme} t @param {boolean} sendMode @param {import("herdr").AgentInfo[]} tabAgents
+   *  @param {boolean} compact @returns {import("gpui-kit").Element} */
   renderParent(t, sendMode, tabAgents, compact) {
     const par = this.parent;
     if (sendMode && !par.terminal) return div().flex_none().child("No agent in this tab");
@@ -1004,6 +1064,7 @@ export default class Review extends View {
         .tooltip("Send to another agent in this tab").on_click((_e, cx) => this.cycleTarget(cx)).child("▾")));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderDoc(t) {
     const open = this.status === "open";
     const general = this.anns.filter((a) => a.type === "general");
@@ -1012,6 +1073,7 @@ export default class Review extends View {
     const words = this.blocks.reduce((n, b) => n + plain(b.src).split(/\s+/).filter(Boolean).length, 0);
     const steps = this.blocks.filter((b) => b.kind === "item").length;
     const sections = this.blocks.filter((b) => b.kind === "heading").length;
+    /** A small meta chip. @param {string} ic @param {string} text @returns {import("gpui-kit").Element} */
     const meta = (ic, text) => h_flex().gap(5).items_center().flex_none().child(icon(ic, 11)).child(text);
     if (!general.length && !editingGeneral) this.appear.forget("general-card");
     return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar()
@@ -1053,6 +1115,7 @@ export default class Review extends View {
             .children(this.blocks.map((b, i) => this.renderBlock(b, i, t)))))));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderSent(t) {
     const s = this.lastSent;
     const c = green(t);
@@ -1076,11 +1139,13 @@ export default class Review extends View {
       } }));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderResult(t) {
     const d = this.sent ?? {};
     const who = this.agentName;
     const plan = this.kind === "plan";
-    const [color, ic, title, body] = d.decision === "answer"
+    /** Every branch pairs a colour with three strings; the destructured names keep those types. */
+    const [color, ic, title, body] = /** @type {[import("gpui-kit").Color, string, string, string]} */ (d.decision === "answer"
       ? [green(t), "check", "Answered", `${who} has your answer${this.choice?.summary() ? `: ${clip(this.choice.summary(), 120)}` : "."}`]
       : d.decision === "approve"
       ? [green(t), "check", d.notes ? "Approved with notes" : plan ? "Plan approved" : "Approved",
@@ -1089,7 +1154,7 @@ export default class Review extends View {
         plan ? `Your feedback was sent. ${who} will revise the plan.` : `Your feedback was sent to ${who}.`]
       : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : this.choice ? "question" : "review request"} replaced this review.`]
       : d.decision === "dismissed" ? [t.dim, "x", "Closed", "Closed without a decision."]
-      : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."];
+      : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."]);
     return fadeIn(h_flex(), this.appear.is("result"), 8, { duration: 280, easing: "ease-out" }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
       .border_1().border_color(tint(color, "66")).shadow_md()
       .child(wash(tint(color, "26"), tint(t.background, "00"), 90))
@@ -1102,7 +1167,9 @@ export default class Review extends View {
         .child(div().text_size(this.sz(12.5)).text_color(t.muted).child(body)));
   }
 
-  /** The options of a ```choice block, as chips to click. */
+  /** The options of a ```choice block, as chips to click. A choice block always carries its question
+   *  and options (blocks.js parseChoice). @param {import("./types").Block & { question: string; options: { label: string; description?: string }[] }} b
+   *  @param {number} i @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderChoiceBlock(b, i, t) {
     const open = this.status === "open";
     const picked = new Set(this.anns.find((a) => a.type === "choice" && a.block === i)?.picked ?? []);
@@ -1116,7 +1183,7 @@ export default class Review extends View {
         const on = picked.has(o.label);
         return h_flex().id(`cb-${i}-${oi}`).gap(6).px(10).py(5).items_center().rounded(8).border_1()
           .border_color(on ? g : t.border).bg(on ? tint(g, "1e") : t.background).text_size(this.sz(12.5))
-          .when(!!o.description, (el) => el.tooltip(o.description))
+          .when(!!o.description, (el) => el.tooltip(/** @type {string} */ (o.description)))
           .when(open, (el) => el.cursor_pointer().hover((s) => s.border_color(tint(g, "aa")))
             .on_click((_e, cx) => { cx.stop_propagation(); this.pickOption(i, o.label, cx); }))
           .when(on, (el) => el.child(div().text_color(g).child(icon("check", 12))))
@@ -1124,6 +1191,8 @@ export default class Review extends View {
       })));
   }
 
+  /** One document block: its text (struck through when deleted / replaced), the hover toolbar, and its notes.
+   *  @param {import("./types").Block} b @param {number} i @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderBlock(b, i, t) {
     const notes = this.anns.filter((a) => a.block === i && a.type !== "choice");
     const del = notes.find((a) => a.type === "delete");
@@ -1147,9 +1216,9 @@ export default class Review extends View {
       .children(["comment", "delete", "replace"].map((k) => h_flex().id(`tb-${k}-${i}`).h(22).px(7).gap(5).items_center().rounded(5)
         .text_size(this.sz(11.5)).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
         .hover((s) => s.bg(t.hover).text_color(k === "delete" ? t.blocked : t.foreground))
-        .on_click((_e, cx) => this.startEdit(i, k, cx))
-        .child(icon(KINDS[k].icon, 13))
-        .when(this.width >= 560, (el) => el.child(KINDS[k].label))));
+        .on_click((_e, cx) => this.startEdit(i, /** @type {"comment" | "delete" | "replace"} */ (k), cx))
+        .child(icon(KINDS[/** @type {"comment" | "delete" | "replace"} */ (k)].icon, 13))
+        .when(this.width >= 560, (el) => el.child(KINDS[/** @type {"comment" | "delete" | "replace"} */ (k)].label))));
 
     const framed = b.kind === "table";
     const body = div().id(`bw-${i}`).relative().flex_1().min_w(0).px(10).py(heading ? 6 : 3).rounded(8)
@@ -1161,7 +1230,7 @@ export default class Review extends View {
         .when(b.kind === "quote", (el) => el.pl(10).border_l_2().border_color(tint(t.accent, "88")))
         // Text keeps its own presses (selection, ⌘C) instead of handing the keyboard to the root.
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-        .child(b.kind === "choice" ? this.renderChoiceBlock(b, i, t) : TextView.markdown(`b-${i}`, b.src).selectable(true)))
+        .child(b.kind === "choice" ? this.renderChoiceBlock(/** @type {import("./types").Block & { question: string; options: { label: string; description?: string }[] }} */ (b), i, t) : TextView.markdown(`b-${i}`, b.src).selectable(true)))
       .when(hover && !editingHere, (el) => el.child(toolbar));
 
     // Left gutter: a marker in the annotation's colour, or a faint dot on hover.
@@ -1186,12 +1255,16 @@ export default class Review extends View {
         .when(editingHere, (el) => el.child(div().pl(10).py(6).child(this.renderEditor(t)))));
   }
 
+  /** A small type chip ("COMMENT", "DELETE"…). @param {import("./types").Annotation["type"]} type
+   *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   pill(type, t) {
     const c = this.color(type, t);
     return h_flex().flex_none().h(18).px(6).gap(4).items_center().rounded(5).bg(tint(c, "22")).text_color(c)
       .text_size(this.sz(10)).font_semibold().child(icon(KINDS[type].icon, 11)).child(KINDS[type].label.toUpperCase());
   }
 
+  /** One annotation as a card. @param {import("./types").Annotation} a @param {import("./types").Theme} t
+ *  @returns {import("gpui-kit").Element} */
   renderNote(a, t) {
     const color = this.color(a.type, t);
     const open = this.status === "open";
@@ -1221,6 +1294,7 @@ export default class Review extends View {
         .text_color(a.type === "replace" ? t.dim : t.foreground).child(text)));
   }
 
+  /** The open note editor (this.editing). @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderEditor(t) {
     const e = this.editing;
     const color = this.color(e.type, t);
@@ -1245,8 +1319,11 @@ export default class Review extends View {
           color: e.type === "delete" ? t.blocked : t.solid, kbd: "⌘↵", onClick: (cx) => this.saveEdit(cx) })));
   }
 
+  /** The annotations sidebar: tabs, per-type stats, and the notes list or the markdown preview.
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderSide(t) {
     const list = ordered(this.anns);
+    /** One sidebar tab. @param {string} id @param {string} label @param {number} count @returns {import("gpui-kit").Element} */
     const tab = (id, label, count) => h_flex().id(`pr-tab-${id}`).flex_1().h(26).gap(6).justify_center().items_center().rounded(6)
       .text_size(this.sz(12)).font_medium().cursor_pointer().text_color(this.sideTab === id ? t.foreground : t.muted)
       .when(this.sideTab === id, (el) => el.bg(t.background).shadow_sm())
@@ -1255,6 +1332,7 @@ export default class Review extends View {
       .child(label)
       .when(!!count, (el) => el.child(div().h(16).px(5).rounded(8).flex().items_center().text_size(this.sz(10)).font_semibold()
         .bg(tint(t.accent, "26")).text_color(t.accent).child(String(count))));
+    /** One per-type stat tile. @param {"comment" | "delete" | "replace" | "general"} k @returns {import("gpui-kit").Element} */
     const stat = (k) => {
       const c = this.color(k, t);
       const n = this.anns.filter((a) => a.type === k).length;
@@ -1276,6 +1354,8 @@ export default class Review extends View {
         .child(this.sideTab === "preview" ? this.renderPreview(t) : this.renderList(list, t)));
   }
 
+  /** The notes list (the sidebar's "Annotations" tab). @param {import("./types").Annotation[]} list
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderList(list, t) {
     const open = this.status === "open";
     if (!list.length) {
@@ -1315,6 +1395,8 @@ export default class Review extends View {
     }));
   }
 
+  /** The sidebar's "Preview" tab: the markdown the agent receives.
+ *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderPreview(t) {
     const md = this.feedback;
     if (!md) {

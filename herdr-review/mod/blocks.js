@@ -9,6 +9,8 @@
 //   - SQLite: zero setup
 //   ```
 // It carries {question, options: [{label, description}], multi}.
+/** @import { Block, BlockKind } from "./types" */
+
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const HEADING = /^ {0,3}#{1,6}(\s|$)/;
 const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+/;
@@ -16,8 +18,11 @@ const RULE = /^ {0,3}([-*_])(\s*\1){2,}\s*$/;
 const TABLE = /^\s*\|/;
 const QUOTE = /^ {0,3}>/;
 
+/** Splits a markdown plan into annotatable blocks (skipping front matter).
+ *  @param {string} text @returns {Block[]} */
 export function splitBlocks(text) {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  /** @type {Block[]} */
   const out = [];
   let i = 0;
   // Front matter is not part of the plan's prose.
@@ -25,6 +30,7 @@ export function splitBlocks(text) {
     const end = lines.indexOf("---", 1);
     if (end > 0) i = end + 1;
   }
+  /** @param {BlockKind} kind @param {number} from @param {number} to @param {number} [level] */
   const push = (kind, from, to, level = 0) => {
     const src = lines.slice(from, to).join("\n").replace(/\s+$/, "");
     if (src.trim()) out.push({ kind, src, line: from, level });
@@ -93,9 +99,13 @@ export function splitBlocks(text) {
   return out;
 }
 
-/** A choice fence's body: question lines, then `- label: description` options. Null without a question and an option. */
+/** A choice fence's body: question lines, then `- label: description` options. Null without a question and an option.
+ *  @param {string[]} body @param {boolean} multi
+ *  @returns {{ question: string; options: { label: string; description?: string }[]; multi: boolean } | null} */
 function parseChoice(body, multi) {
+  /** @type {string[]} */
   const q = [];
+  /** @type {{ label: string; description?: string }[]} */
   const options = [];
   for (const raw of body) {
     const l = raw.trim();
@@ -110,9 +120,12 @@ function parseChoice(body, multi) {
   return q.length && options.length ? { question: q.join(" "), options, multi } : null;
 }
 
+/** Indentation of `s` in spaces (tabs count as 4).
+ *  @param {string} s @returns {number} */
 const leading = (s) => s.replace(/\t/g, "    ").length - s.replace(/\t/g, "    ").trimStart().length;
 
-/** Plain text of a block, for quotes and labels. */
+/** Plain text of a block, for quotes and labels.
+ *  @param {string} src @returns {string} */
 export function plain(src) {
   return src
     .replace(/^ {0,3}#{1,6}\s+/, "")
