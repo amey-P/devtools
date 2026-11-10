@@ -7,6 +7,7 @@ import * as fs from "fs/promises";
 import { appHome, openOverlay, agents, run } from "herdr";
 import * as core from "./config-core.js";
 export const ICONS = "mods/review/icons";
+/** Display names by agent app. Looked up with any app name, so a miss is undefined. @type {Record<string, string | undefined>} */
 export const AGENT_NAMES = { claude: "Claude Code", "claude-code": "Claude Code", pi: "pi", codex: "Codex" };
 /** Last path segment of `f` (a file path; null/undefined give ""). `split` always yields at least one
  *  element, so the pop is always a string — the callers (main.js fillText vars) need one.
