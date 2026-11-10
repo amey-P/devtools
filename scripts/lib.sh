@@ -20,7 +20,8 @@ die()  { printf '%serror: %s%s\n' "$_c_err" "$*" "$_c_off" >&2; exit 1; }
 dim()  { printf '%s%s%s\n' "$_c_dim" "$*" "$_c_off"; }
 
 # Files Herdr writes into a mod folder, plus junk: never copied, never deleted.
-HERDR_EXCLUDES=(--exclude jsconfig.json --exclude '*.d.ts' --exclude .installed.json
+# tsconfig.json: dev-only type checking (npm run typecheck), never read by Herdr.
+HERDR_EXCLUDES=(--exclude jsconfig.json --exclude tsconfig.json --exclude '*.d.ts' --exclude .installed.json
   --exclude .DS_Store --exclude '*.bak' --exclude .gitignore)
 
 os_name() {
@@ -86,7 +87,7 @@ sync_file() {
 # tree_stamp <dir…>: a fingerprint of file paths and mtimes (GNU or BSD stat).
 if stat -c %Y / >/dev/null 2>&1; then _stat_fmt=(-c '%Y %n'); else _stat_fmt=(-f '%m %N'); fi
 tree_stamp() {
-  find "$@" -type f ! -name '*.bak' ! -name '*.d.ts' ! -name jsconfig.json ! -name .DS_Store \
+  find "$@" -type f ! -name '*.bak' ! -name '*.d.ts' ! -name jsconfig.json ! -name tsconfig.json ! -name .DS_Store \
     -exec stat "${_stat_fmt[@]}" {} + 2>/dev/null | LC_ALL=C sort | cksum
 }
 

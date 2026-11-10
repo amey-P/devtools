@@ -46,7 +46,8 @@ const CLAUDE_SRC = join(REPO, "integrations", "claude");
 const PI_SRC = join(REPO, "integrations", "pi");
 const PI_SETTINGS = join(homedir(), ".pi", "agent", "settings.json");
 // Files Herdr writes into a mod folder; never copied, never deleted.
-const HERDR_OWNED = new Set(["jsconfig.json", "gpui-kit.d.ts", "herdr.d.ts", ".installed.json"]);
+// Plus the dev-only type-checking files (npm run typecheck), which the runtime never reads.
+const HERDR_OWNED = new Set(["jsconfig.json", "gpui-kit.d.ts", "herdr.d.ts", ".installed.json", "tsconfig.json", "types.d.ts"]);
 const MANIFESTS = [
   "package.json",
   "integrations/claude/.claude-plugin/plugin.json",

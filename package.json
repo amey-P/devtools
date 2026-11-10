@@ -1,0 +1,13 @@
+{
+  "name": "herdr-app-devtools",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the Herdr mods in this repo. Not installed anywhere; see install.sh.",
+  "scripts": {
+    "typecheck": "node scripts/typecheck.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}

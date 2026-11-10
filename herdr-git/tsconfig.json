@@ -1,0 +1,5 @@
+{
+  "// why": "Type-checks this mod (npm run typecheck at the repo root). Dev-only: the installers don't copy it.",
+  "extends": "../tsconfig.mod.json",
+  "include": ["*.js", "*.d.ts", "../types/herdr.d.ts"]
+}

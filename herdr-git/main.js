@@ -290,6 +290,8 @@ export default class Git extends View {
       .child(h_flex().h(6).w_full().rounded(3).overflow_hidden().gap(2)
         .children(groups.map((g) => div().h_full().rounded(3).bg(g.color).flex_basis(0).flex_grow(g.files.length))));
 
+    // Typed on purpose: inferring this array from the pushes below takes tsc ~10 minutes.
+    /** @type {import("gpui-kit").Element[]} */
     const rows = [];
     let height = 0;
     for (const g of groups) {

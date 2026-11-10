@@ -1,0 +1,23 @@
+{
+  "// why": [
+    "The Node scripts: installers, bridges, hooks, scanners. Mod folders have their own tsconfig.json",
+    "(QuickJS, not Node), so the editor uses those for mod code and this one for everything else.",
+    "integrations/pi/index.ts is @ts-nocheck: its pi dependency isn't installed in this repo."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "strictNullChecks": false,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["**/*.mjs"],
+  "exclude": ["node_modules"]
+}

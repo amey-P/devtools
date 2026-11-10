@@ -4,6 +4,8 @@ node_modules/
 # written by Herdr into mod folders (herdr-app check, --link installs)
 jsconfig.json
 *.d.ts
+!herdr-review/mod/types.d.ts
+!types/*.d.ts
 .installed.json
 # local agent plans
 .pi/

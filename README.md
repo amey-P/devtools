@@ -62,6 +62,22 @@ Edit files in this repo, never in Herdr's home. Then run:
 - **Copies, not symlinks.** Herdr neither hot-reloads nor loads mod SVGs through a symlinked mod folder. If a symlink is found where a mod should be, the installer replaces it with a copy.
 - Herdr writes `jsconfig.json` and `*.d.ts` into mod folders. These are never copied or deleted, and git ignores them.
 - If Herdr changed the minimal layout in its home (the theme picker writes `theme`), sync adopts the newer copy back into the repo and keeps the old one as `.bak`.
+### Type checking
+
+The mods stay plain `.js` (Herdr runs them on QuickJS), with types in JSDoc comments, checked by TypeScript:
+
+```sh
+npm install                  # once: typescript + @types/node, dev-only
+npm run typecheck            # every mod and the Node scripts
+npm run typecheck -- usage   # only projects whose path contains "usage"
+```
+
+- Each mod folder has a `tsconfig.json` extending `tsconfig.mod.json`; the root `tsconfig.json` covers the Node scripts (`*.mjs`). Editors pick these up, so errors show inline.
+- `noImplicitAny` is on: a parameter without a JSDoc type (`/** @param {string} id */`) is an error. Existing code is being annotated over time, so the check doesn't pass yet.
+- The script regenerates each mod's `gpui-kit.d.ts` with `herdr-app check` first. Fixes for gaps in Herdr's own types go in `types/herdr.d.ts`.
+- `tsconfig.json` and `*.d.ts` are dev-only; the installers never copy them.
+- Give arrays built by `push` in a loop an explicit type: tsc once took ~10 minutes inferring one (`herdr-git` `statusCard`).
+
 - Shared helpers live in `scripts/lib.sh` (`sync_mod`, `sync_file`, `watch_loop`, `need`). They are portable across BSD/macOS and GNU/Linux userlands and bash 3.2+.
 
 ## Adding a project
