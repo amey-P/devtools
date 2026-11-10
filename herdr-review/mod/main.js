@@ -751,6 +751,8 @@ export default class Review extends View {
     cx.spawn(async (cx) => this.decide("answer", cx, r));
   }
 
+  /** The Approve decision. `mode`: "notes" approves with the notes, "discard" drops them; a bare Approve
+ *  with notes opens the menu. @param {import("gpui-kit").Context} cx @param {"notes" | "discard" | null} [mode] */
   approve(cx, mode = null) {
     if (this.choice) { this.submitChoice(cx); return; }
     if (this.status !== "open" || this.mode !== "decision") return;
@@ -764,6 +766,7 @@ export default class Review extends View {
     cx.spawn(async (cx) => this.decide("approve", cx, notes ? { notes } : {}));
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   deny(cx) {
     if (this.choice) { this.submitChoice(cx); return; }
     if (this.mode === "send") { this.send(cx); return; }
@@ -783,6 +786,7 @@ export default class Review extends View {
     return true;
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   submitKey(cx) {
     if (!this.dedupe()) return;
     if (this.choice) { this.submitChoice(cx); return; }
@@ -790,6 +794,7 @@ export default class Review extends View {
     else if (!this.approveMenu) this.deny(cx);
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   approveKey(cx) {
     if (this.mode !== "decision" || !this.dedupe()) return;
     if (this.choice) { this.submitChoice(cx); return; }
@@ -797,6 +802,7 @@ export default class Review extends View {
     else this.approve(cx);
   }
 
+  /** @param {import("gpui-kit").Context} cx */
   copyFeedback(cx) {
     const md = this.feedback;
     if (!md) return;
@@ -829,10 +835,14 @@ export default class Review extends View {
     };
   }
 
+  /** A block type's color: blocked red for delete, green for replace and choice, accent for general.
+ *  @param {import("./types").Annotation["type"]} type @param {import("./types").Theme} t @returns {import("gpui-kit").Color} */
   color(type, t) {
     return type === "delete" ? t.blocked : type === "replace" || type === "choice" ? green(t) : type === "general" ? t.accent : t.ansi3;
   }
 
+  /** Key handler (on_key_down, and the focus handle's bindings). `e.keystroke` has ctrl- read as cmd-.
+ *  @param {import("gpui-kit").KeyEvent} e @param {import("gpui-kit").Context} cx */
   onKey(e, cx) {
     if (this.settings) return; // the settings screen has its own keys
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
@@ -849,6 +859,7 @@ export default class Review extends View {
     cx.stop_propagation();
   }
 
+  /** @param {import("gpui-kit").Context} cx @returns {import("gpui-kit").Element} */
   render(cx) {
     if (this.launcher) return div().id("launcher").size_full()
       .on_size_change((size) => { if (!this.winSize) { this.winSize = size; this.onSized?.(); } });
@@ -889,10 +900,11 @@ export default class Review extends View {
         .when(!wide && !this.choice, (el) => el.child(div().absolute().top(0).right(0).bottom(0).when(side, (e) => e.shadow_lg()).child(drawer))));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderHeader(t) {
     const p = this.agent?.program;
     const ic = p?.icon
-      ? (p.tint ? svg(p.icon).size(18).flex_none().text_color(p.color ?? t.foreground) : image(p.icon).w(18).h(18).flex_none())
+      ? (p.tint ? svg(p.icon).size(18).flex_none().text_color(/** @type {import("gpui-kit").Color} */ (p.color ?? t.foreground)) : image(p.icon).w(18).h(18).flex_none())
       : div().w(18).h(18).rounded(5).bg(t.accent).flex_none();
     const open = this.status === "open";
     const loading = this.status === "loading";
@@ -901,14 +913,14 @@ export default class Review extends View {
     const d = this.sent?.decision;
     const sendMode = this.mode === "send";
     const plan = this.kind === "plan";
-    const [stColor, stLabel] = loading ? [t.dim, "Loading…"] : open
+    const [stColor, stLabel] = /** @type {[import("gpui-kit").Color, string]} */ (loading ? [t.dim, "Loading…"] : open
       ? (sendMode
         ? (this.sending ? [t.working, "Sending…"]
           : n ? [t.accent, "Ready to send"]
           : this.lastSent ? [green(t), `Sent ${ago(this.lastSent.at)}${ago(this.lastSent.at) === "just now" ? "" : " ago"}`]
           : [t.accent, "Annotate, then send"])
         : [t.accent, this.req?.created && ago(this.req.created) !== "just now" ? `Waiting ${ago(this.req.created)}` : this.choice ? "Waiting for your answer" : "Awaiting your review"])
-      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"];
+      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"]);
     const tabAgents = sendMode && !this.id ? this.tabAgents : [];
     const counts = ["comment", "delete", "replace", "general"].map((k) => [k, this.anns.filter((a) => a.type === k).length]).filter(([, c]) => c);
     return h_flex().id("pr-head").relative().h(64).flex_none().pl(16).pr(10).gap(12).items_center().bg(t.chrome)
@@ -934,8 +946,8 @@ export default class Review extends View {
           .when(!loading, (el) => el.child(div().flex_none().child("·"))
             .child(this.renderParent(t, sendMode, tabAgents, compact)))
           .when(!loading && !compact && counts.length > 0, (el) => el.child(div().flex_none().child("·"))
-            .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(k, t))
-              .child(icon(KINDS[k].icon, 11)).child(String(c)))))
+            .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(/** @type {"comment" | "delete" | "replace" | "general"} */ (k), t))
+              .child(icon(KINDS[/** @type {"comment" | "delete" | "replace" | "general"} */ (k)].icon, 11)).child(String(c)))))
           .when(!!this.choice && open && !compact, (el) => el.child(div().flex_none().child("·"))
             .child(div().flex_none().child(`${this.choice.answered} of ${plural(this.choice.qs.length, "question")} answered`)))
           .when(!this.choice && !n && open && !compact, (el) => el.child(div().flex_none().child("·")).child(div().flex_none().child("No annotations")))))
@@ -967,7 +979,8 @@ export default class Review extends View {
   /** Request changes · Approve, by state (see the top of this file):
    *    writing a note   both wait (dimmed) until it's saved or cancelled
    *    no notes         Approve leads (solid); Request changes is quiet (it starts a global comment)
-   *    notes            Request changes leads (solid, ⌘↵); Approve is "Approve with notes" + ▾ (with notes / discard) */
+   *    notes            Request changes leads (solid, ⌘↵); Approve is "Approve with notes" + ▾ (with notes / discard) *
+ *  @param {import("./types").Theme} t @param {boolean} compact @returns {import("gpui-kit").Element[]} */
   renderDecision(t, compact) {
     const plan = this.kind === "plan";
     const n = this.anns.length;
@@ -987,11 +1000,11 @@ export default class Review extends View {
     const main = btn("pr-approve", t, { ic: "check", label: compact ? okLabel : `${okLabel} with notes`, variant: "outline", color: g, split: true,
       disabled: writing, tooltip: wait ?? `${okLabel}, and send your ${plural(n, "note")} for ${this.agentName} to follow`,
       onClick: (cx) => this.approve(cx, "notes") });
-    const arrow = (open) => chevron("pr-approve-more", t, { color: g, disabled: writing, open, tooltip: writing ? wait : "More ways to approve" });
+    const arrow = (/** @type {boolean} */ open) => chevron("pr-approve-more", t, { color: g, disabled: writing, open, tooltip: writing ? wait : "More ways to approve" });
     if (writing) return [deny, h_flex().flex_none().items_center().child(main).child(arrow(false))];
     const menu = Popover.new("pr-approve-menu").anchor("top_right")
       .open(this.approveMenu)
-      .on_open_change((open, cx) => { this.approveMenu = open; if (!open) this.appear.forget("approve-menu"); cx.notify(); })
+      .on_open_change((/** @type {boolean} */ open, cx) => { this.approveMenu = open; if (!open) this.appear.forget("approve-menu"); cx.notify(); })
       .trigger(arrow(this.approveMenu))
       .content(this.renderApproveMenu(t, okLabel));
     return [deny, h_flex().flex_none().items_center().child(main).child(menu)];
