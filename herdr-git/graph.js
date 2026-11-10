@@ -1,3 +1,5 @@
+/** @import { Graph, GraphCommit, GraphRow, RowPath, Segment } from "./types" */
+
 // Lane layout for a commit graph: pure data, no drawing.
 //
 // Commits arrive newest first in topological order. Each column ("lane")
@@ -9,20 +11,32 @@
 export const ROW = 28;          // row height, px
 export const MID = ROW / 2;
 
+/**
+ * Assigns each commit a lane and records which lanes run through its top
+ * half (into the node or straight past) and bottom half (out to its parents).
+ * @param {GraphCommit[]} commits newest first, topological order
+ * @returns {Graph}
+ */
 export function layout(commits) {
+  /** @type {(string | null)[]} */
   const lanes = [];   // hash each column waits for, or null
+  /** @type {number[]} */
   const color = [];   // palette index per column
+  /** @type {boolean[]} */
   const dash = [];    // the line in this column is dashed (uncommitted → HEAD)
   let nextColor = 0, maxCols = 1;
   const free = () => { const i = lanes.indexOf(null); return i < 0 ? lanes.length : i; };
+  /** @type {Map<string, number>} */
   const index = new Map();
 
+  /** @type {GraphRow[]} */
   const rows = commits.map((c, n) => {
     index.set(c.hash, n);
     let col = lanes.indexOf(c.hash);
     const tip = col < 0;
     if (tip) { col = free(); lanes[col] = c.hash; color[col] = c.wip ? 0 : nextColor++; dash[col] = false; }
 
+    /** @type {Segment[]} */
     const top = [];
     for (let i = 0; i < lanes.length; i++) {
       if (lanes[i] == null) continue;
@@ -32,6 +46,7 @@ export function layout(commits) {
     const nodeColor = color[col];
     for (let i = 0; i < lanes.length; i++) if (lanes[i] === c.hash && i !== col) lanes[i] = null;
 
+    /** @type {Segment[]} */
     const out = []; // segments leaving the node
     const parents = c.parents;
     if (!parents.length) lanes[col] = null;
@@ -60,7 +75,7 @@ export function layout(commits) {
     for (const s of top) cols = Math.max(cols, s.from + 1, s.to + 1);
     for (const s of bottom) cols = Math.max(cols, s.from + 1, s.to + 1);
     maxCols = Math.max(maxCols, cols);
-    return { col, color: nodeColor, top, bottom, cols, merge: parents.length > 1, paths: null };
+    return { col, color: nodeColor, top, bottom, cols, merge: parents.length > 1, paths: /** @type {RowPath[] | null} */ (null) };
   });
   return { rows, cols: maxCols, index };
 }
@@ -68,8 +83,17 @@ export function layout(commits) {
 // Groups a row's segments by (color, dash) into stroke paths. `x(col)` is the
 // lane's center. Built once per row and kept: the result only names palette
 // indexes, so a theme change recolors without rebuilding.
+/**
+ * Groups a row's segments by (color, dash) into stroke paths.
+ * @param {GraphRow} row
+ * @param {(col: number) => number} x lane center for a column
+ * @param {typeof import("gpui-kit").PathBuilder} PathBuilder
+ * @returns {RowPath[]}
+ */
 export function rowPaths(row, x, PathBuilder) {
+  /** @type {Map<string, { color: number, dash: boolean, segs: number[][] }>} */
   const groups = new Map();
+  /** @param {Segment} s @param {number} y0 @param {number} y1 */
   const seg = (s, y0, y1) => {
     const k = `${s.color}:${s.dash ? 1 : 0}`;
     if (!groups.has(k)) groups.set(k, { color: s.color, dash: s.dash, segs: [] });
