@@ -25,6 +25,8 @@ import {
 import { Settings } from "./settings.js";
 import * as cfg from "./config.js";
 
+/** @import {RawConfig, Theme} from "./types" */
+
 const BLOCK = "usage";            // the layout block this mod lives in
 const NARROW = 160;
 const ROW = 26;                   // compact row
@@ -32,7 +34,9 @@ const PAD = 6;                    // compact strip's top/bottom padding
 const TILE = 26;                  // rail tile
 const RAIL_GAP = 6;
 const CHECK_MS = 30_000;          // how often the cadence timer checks what's due
+/** @type {import("gpui-shell").TransitionPolicy} */
 const EXPAND = { duration: 160, easing: "ease-out" };
+/** @type {import("gpui-shell").TransitionPolicy} */
 const GLIDE = { duration: 420, easing: "ease-out" };
 
 // Row metadata (label/icon/brand and the live-agent matchers) comes from
@@ -40,6 +44,7 @@ const GLIDE = { duration: 420, easing: "ease-out" };
 // it can't be read). Edit that file to swap services in or out.
 
 // A live agent belongs to a service when its program key or app name matches.
+/** @param {import("herdr").AgentInfo} a @param {{ program?: string | null, apps?: string[] }} m @returns {boolean} */
 const owns = (a, m) => {
   const app = a.app ?? "";
   return (m.program && (a.program?.key === m.program || app.startsWith(m.program)))
@@ -47,14 +52,17 @@ const owns = (a, m) => {
 };
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1 };
 
+/** @param {import("gpui-kit").MouseButtonEvent} _e @param {import("gpui-kit").Context} cx */
 const stop = (_e, cx) => cx.stop_propagation();
 
 // "#rrggbb" + alpha → "#rrggbbaa" (same as space-tree's glyphs.js).
+/** @param {import("gpui-kit").Color | null} hex @param {number} a @returns {import("gpui-kit").Color | null} */
 function alpha(hex, a) {
   if (typeof hex !== "string" || !hex.startsWith("#") || hex.length < 7) return hex;
-  return hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  return /** @type {import("gpui-kit").Color} */ (hex.slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0"));
 }
 
+/** @param {number} n @returns {string} */
 function fmtTokens(n) {
   if (!n) return "0";
   if (n < 1000) return String(n);
@@ -62,12 +70,16 @@ function fmtTokens(n) {
   if (n < 1e9) return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`;
   return `${(n / 1e9).toFixed(1)}B`;
 }
+/** @param {number} c @returns {string} */
 function fmtCost(c) {
   if (!c) return "$0";
   if (c < 0.01) return "<$0.01";
   if (c < 100) return `$${c.toFixed(2)}`;
   return `$${Math.round(c).toLocaleString("en-US")}`;
 }
+/** ISO time → time left ("3h 20m"), "" once the window has reset.
+ *  @param {string | null} iso @returns {string}
+ */
 function fmtIn(iso) {
   const ms = Date.parse(iso ?? "") - Date.now();
   if (!(ms > 0)) return "";
@@ -77,6 +89,10 @@ function fmtIn(iso) {
   if (h < 48) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+/** ISO time → "just now" / "5m ago" / "2h ago", "" before the first scan (this.data?.at is
+ *  undefined until then).
+ *  @param {string | null | undefined} iso @returns {string}
+ */
 function fmtAgo(iso) {
   const s = Math.round((Date.now() - Date.parse(iso ?? "")) / 1000);
   if (!(s >= 0)) return "";
@@ -86,15 +102,22 @@ function fmtAgo(iso) {
 }
 
 // Limit color: calm → warning → critical, from the theme's ANSI palette.
+/** @param {number} pct @param {Theme} t @returns {import("gpui-kit").Color} */
 const level = (pct, t) => (pct >= 80 ? t.ansi1 : pct >= 50 ? t.ansi3 : t.ansi2);
 
 export default class AgentUsage extends View {
+  /**
+   * @param {import("gpui-shell").Props | undefined} _props
+   * @param {import("gpui-kit").AsyncContext} cx
+   */
   init(_props, cx) {
     // The settings screen, in one floating window (mods/usage-settings, ⚙ in the card): this copy
     // renders it instead of the strip and stays out of the widget's work below.
     const p = props() ?? {};
     if (p.settings && p.float) { this.settings = new Settings(p.overlay, cx); return; }
+    /** @type {number} */
     this.width = 248;
+    /** @type {number} */
     this.detailH = 0;
     this.lastPx = null;
     this.busy = false;
@@ -108,11 +131,13 @@ export default class AgentUsage extends View {
     this.cfgError = null;
     this.writeError = null;
     this.services = cfg.DEFAULT_SERVICES;
+    /** @type {RawConfig} */
     this.raw = {};                // last config.json that parsed
     try { this.data = JSON.parse(localStorage.getItem("data") ?? "null"); } catch {}
     try { this.pinned = localStorage.getItem("pinned") === "1"; } catch {}
     // Services hidden from the strip used to live in localStorage; until migrateHidden has moved
     // them into config.json, keep honoring them so the strip doesn't flash them back on.
+    /** @type {string[]} */
     this.legacyHidden = [];
     try {
       const legacy = JSON.parse(localStorage.getItem("hidden") ?? "null");
@@ -131,6 +156,7 @@ export default class AgentUsage extends View {
     cx.timer.every(CHECK_MS, (cx) => {
       // Slack of half a check: the timer drifts, and "59.9 s since" shouldn't wait 30 s more.
       const now = Date.now();
+      /** @param {number} last @param {number} min @returns {boolean} */
       const due = (last, min) => now - last >= min * 60_000 - CHECK_MS / 2;
       const scan = due(this.lastScanAt, this.cfg.scan.everyMinutes);
       const limits = due(this.lastLimitsAt, this.cfg.scan.limitsEveryMinutes);
