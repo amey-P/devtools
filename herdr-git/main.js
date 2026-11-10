@@ -6,6 +6,11 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } fr
 import { spaces, panes, focused, props, exec, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 
+/** @import { Commit, Detail, NumStat, Ref, Status, Theme } from "./types" */
+/** @import { AsyncContext, Color, Context } from "gpui-kit" */
+/** @import { Props } from "gpui-shell" */
+
+/** @type {(name: string) => string} */
 const ICON = (name) => `mods/git/${name}.svg`;
 // Reads write nothing under .git (no index refresh, lock or fsmonitor
 // cookie), so the folder watch never sees our own reads.
@@ -13,11 +18,25 @@ const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.a
 const LIMIT = 400;
 const US = "\x1f", RS = "\x1e";
 
-const alpha = (c, a) => (typeof c === "string" && c.startsWith("#") ? c.slice(0, 7) + a : c);
+/**
+ * A theme color with a new hex-alpha suffix: (#rrggbb, "1f") → #rrggbb1f.
+ * @param {Color} c
+ * @param {string} a
+ * @returns {Color}
+ */
+const alpha = (c, a) => (typeof c === "string" && c.startsWith("#") ? /** @type {Color} */ (c.slice(0, 7) + a) : c);
+/**
+ * The lane colors for a theme, in graph order.
+ * @param {Theme} t
+ * @returns {Color[]}
+ */
 const palette = (t) => [t.accent, t.ansi5, t.ansi6, t.ansi2, t.ansi3, t.ansi4, t.ansi1, t.ansi13, t.ansi14, t.ansi10];
+/** @type {(s: string) => number} */
 const hashOf = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h); };
+/** @param {string} name */
 const initials = (name) => (name.trim().split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("") || "?").toUpperCase();
 
+/** @param {number} sec @returns {string} */
 function ago(sec) {
   const d = Date.now() / 1000 - sec;
   if (d < 60) return "now";
@@ -28,6 +47,10 @@ function ago(sec) {
   return `${Math.floor(d / (86400 * 365))}y`;
 }
 
+/**
+ * The folder this copy of the mod watches and the machine it runs commands on.
+ * @returns {{ cwd: string | null, on: string | null }}
+ */
 function location() {
   const p = props() ?? {};
   if (p.folder) return { cwd: p.folder, on: p.on ?? null };
@@ -37,9 +60,12 @@ function location() {
   const term = all.find((x) => x.tab === tab && x.terminal && x.cwd);
   return { cwd: term?.cwd || space?.folder || null, on: space?.machine ?? null };
 }
+/** @type {() => string} */
 const key = () => JSON.stringify(location());
 
+/** @param {string} text @returns {Status} */
 function parseStatus(text) {
+  /** @type {Status} */
   const out = { branch: null, oid: null, upstream: null, ahead: 0, behind: 0, staged: [], modified: [], untracked: [], conflicts: [] };
   const parts = text.split("\0");
   for (let i = 0; i < parts.length; i++) {
@@ -65,7 +91,9 @@ function parseStatus(text) {
   return out;
 }
 
+/** @param {string} text @returns {Record<string, NumStat>} */
 function parseNumstat(text) {
+  /** @type {Record<string, NumStat>} */
   const stats = {};
   for (const entry of text.split("\0")) {
     const [a, d, ...rest] = entry.split("\t");
@@ -75,7 +103,13 @@ function parseNumstat(text) {
   return stats;
 }
 
+/**
+ * @param {string} text the %D decorate list
+ * @param {string[]} remotes remote names from `git remote`
+ * @returns {Ref[]}
+ */
 function parseRefs(text, remotes) {
+  /** @type {Ref[]} */
   const refs = [];
   for (const raw of text.split(",").map((s) => s.trim()).filter(Boolean)) {
     if (raw.startsWith("HEAD -> ")) refs.push({ kind: "head", name: raw.slice(8) });
@@ -97,11 +131,16 @@ function parseRefs(text, remotes) {
 }
 
 export default class Git extends View {
+  /**
+   * @param {Props | undefined} _props
+   * @param {AsyncContext} cx
+   */
   init(_props, cx) {
     this.handle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
     this.size = { width: 600, height: 800 };
     this.all = true;
+    /** @type {Record<string, boolean>} */
     this.folded = {};
     this.reset();
     this.refresh(cx);
@@ -121,12 +160,17 @@ export default class Git extends View {
   }
 
   reset() {
-    this.root = null; this.on = null; this.error = null; this.status = null; this.commits = []; this.graph = null;
+    this.root = null; this.on = null; this.error = null; this.status = null; this.commits = /** @type {Commit[]} */ ([]); this.graph = null;
     this.stash = 0; this.sel = null; this.detail = null; this.watched = null; this.loaded = false;
   }
 
+  /**
+   * @param {string} root
+   * @param {Context} cx
+   */
   watch(root, cx) {
-    if (this.on || this.watched === root) return;
+    if (this.on || /** @type {string | null} */ (this.watched) === root) return;
+    /** @type {string | null} */
     this.watched = root;
     cx.spawn(async (cx) => {
       try {
@@ -138,10 +182,15 @@ export default class Git extends View {
     });
   }
 
+  /**
+   * @param {Context} cx
+   */
   refresh(cx) {
     if (this.loading) { this.again = true; return; }
     const { cwd, on } = location(), context = key();
-    if (context !== this.context) { this.context = context; this.reset(); }
+    if (context !== this.context) {
+      /** @type {string | undefined} */
+      this.context = context; this.reset(); }
     if (!cwd) { this.error = "No folder"; return; }
     this.loading = true;
     cx.spawn(async (cx) => {
@@ -150,6 +199,7 @@ export default class Git extends View {
         if (key() !== context) return;
         if (top.code !== 0) { this.reset(); this.error = "Not a git repository"; this.cwd = cwd; return; }
         const root = top.stdout.trim();
+        /** @param {string[]} args */
         const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
         const [st, staged, unstaged, remotes, stash] = await Promise.all([
           git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"]),
@@ -165,6 +215,7 @@ export default class Git extends View {
         for (const f of [...status.modified, ...status.conflicts]) Object.assign(f, uStats[f.path] ?? {});
         const remoteNames = remotes.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
 
+        /** @type {Commit[]} */
         let commits = [];
         if (status.oid) {
           const log = await git(["log", this.all ? "--all" : "HEAD", "--topo-order", "-n", String(LIMIT),
@@ -198,6 +249,11 @@ export default class Git extends View {
     });
   }
 
+  /**
+   * @param {string} hash
+   * @param {Context} cx
+   * @param {{ toggle?: boolean, reveal?: boolean }} [opts]
+   */
   select(hash, cx, { toggle = true, reveal = false } = {}) {
     if (toggle && this.sel === hash) { this.sel = null; this.detail = null; cx.notify(); return; }
     this.sel = hash;
@@ -207,6 +263,7 @@ export default class Git extends View {
     this.detail = { hash, loading: true };
     const root = this.root, on = this.on;
     cx.spawn(async (cx) => {
+      /** @param {string[]} args */
       const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
       const [body, files] = await Promise.all([
         git(["show", "-s", "--format=%B%x1f%ad%x1f%cn", "--date=format:%a %d %b %Y · %H:%M", hash]),
@@ -222,6 +279,10 @@ export default class Git extends View {
     cx.notify();
   }
 
+  /**
+   * @param {number} delta
+   * @param {Context} cx
+   */
   move(delta, cx) {
     if (!this.commits.length) return;
     const i = this.commits.findIndex((c) => c.hash === this.sel);
