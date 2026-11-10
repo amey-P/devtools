@@ -260,7 +260,8 @@ export default class Review extends View {
     } catch { closeOverlay(this.overlay); }
   }
 
-  /** After a decision, a floating window shows the result for a moment, then goes. */
+  /** After a decision, a floating window shows the result for a moment, then goes.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   closeSoon(cx) {
     if (!this.floating || this.mode !== "decision") return;
     cx.timer.after(1200, () => this.closeWindow());
@@ -279,7 +280,8 @@ export default class Review extends View {
     if (this.status === "open" && this.id) await this.markSeen({ deferred_at: Date.now() });
   }
 
-  /** Records when this review was opened / put off (seen.json, read by the inbox). */
+  /** Records when this review was opened / put off (seen.json, read by the inbox).
+ *  @param {import("./types").Seen} patch @returns {Promise<any>} */
   async markSeen(patch) {
     if (!this.id) return;
     const prev = (await readJson(`${this.dir}/seen.json`)) ?? {};
@@ -298,7 +300,8 @@ export default class Review extends View {
     this.closeWindow();
   }
 
-  /** Let the waiting agent fall back to its own prompt (the old ✕). */
+  /** Let the waiting agent fall back to its own prompt (the old ✕).
+ *  @param {import("gpui-kit").Context} cx */
   dismiss(cx) {
     if (this.status !== "open" || this.mode !== "decision") return;
     if (this.editing) this.saveEdit(cx);
@@ -332,7 +335,7 @@ export default class Review extends View {
     return list.find((a) => a.focused)?.address ?? list.sort((a, b) => b.seq - a.seq)[0]?.address ?? null;
   }
 
-  cycleTarget(cx) {
+  cycleTarget(/** @type {import("gpui-kit").Context} */ cx) {
     const list = this.tabAgents;
     if (list.length < 2) return;
     const i = list.findIndex((a) => a.address === this.target);
@@ -375,16 +378,18 @@ export default class Review extends View {
     return "Review";
   }
 
-  /** New text: re-split, and keep annotations anchored to where their quote is now. */
+  /** New text: re-split, and keep annotations anchored to where their quote is now.
+ *  @param {string} text @returns {boolean} */
   setContent(text) {
     if (text === this.text) return false;
+    /** @type {string | undefined} */
     this.text = text;
     this.blocks = splitBlocks(asMarkdown(text, this.file));
     if (this.anns.length) {
       let moved = false;
       this.anns = this.anns.map((a) => {
         if (a.type === "general" || !a.quote) return a;
-        const fits = (i) => i >= 0 && i < this.blocks.length && (this.blocks[i].src.includes(a.quote) || plain(this.blocks[i].src).includes(a.quote));
+        const fits = (/** @type {number} */ i) => i >= 0 && i < this.blocks.length && (this.blocks[i].src.includes(a.quote) || plain(this.blocks[i].src).includes(a.quote));
         if (a.block !== null && fits(a.block)) return a.stale ? { ...a, stale: false } : a;
         // Nearest block that still holds the quote.
         let best = -1;
@@ -399,7 +404,8 @@ export default class Review extends View {
     return true;
   }
 
-  /** Reads the file or the reply again. `manual`: the person asked (always replaces a reply). */
+  /** Reads the file or the reply again. `manual`: the person asked (always replaces a reply).
+ *  @param {import("gpui-kit").Context | null} cx @param {boolean} manual */
   async reloadContent(cx, manual) {
     let text = null;
     if (this.kind === "reply" && !this.id) {
@@ -428,7 +434,8 @@ export default class Review extends View {
     if (this.setContent(text ?? "") || manual) cx?.notify();
   }
 
-  /** Settings saved anywhere (the settings screen, the CLI) apply to this open review. */
+  /** Settings saved anywhere (the settings screen, the CLI) apply to this open review.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   watchConfig(cx) {
     const dir = `${appHome()}/data/review`;
     cx.spawn(async (cx) => {
@@ -446,7 +453,8 @@ export default class Review extends View {
     });
   }
 
-  /** The ⚙ button: the settings screen in place of the document, and back. */
+  /** The ⚙ button: the settings screen in place of the document, and back.
+ *  @param {import("gpui-kit").AsyncContext} cx */
   toggleSettings(cx) {
     // Whichever comes back in (the document or the settings) fades in.
     this.appear.forget("body");
@@ -462,6 +470,7 @@ export default class Review extends View {
     cx.notify();
   }
 
+  /** @param {import("gpui-kit").AsyncContext} cx */
   watchSpool(cx) {
     cx.spawn(async (cx) => {
       for (;;) {
@@ -471,6 +480,7 @@ export default class Review extends View {
     });
   }
 
+  /** @param {import("gpui-kit").AsyncContext} cx */
   watchFile(cx) {
     if (this.launch?.on) {
       cx.timer.every(3000, (cx) => { cx.spawn(async (cx) => this.reloadContent(cx, false)); });
