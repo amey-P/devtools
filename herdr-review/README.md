@@ -114,7 +114,7 @@ updates every open review and the inbox straight away. To bind a key, add `mod.o
 |---|---|
 | **Window** | where reviews open (floating, split right/down, tab), floating size, focus, open vs. wait in the inbox |
 | **Appearance** | font (any installed family), text size, document and sidebar width, sidebar default, reading time |
-| **Agent text** | everything the agent is told: the "plan not approved" message, approved-with-notes, feedback headings and intro, section titles, pi's plan-mode framing |
+| **Agent text** | everything the agent is told: the "plan not approved" message, approved-with-notes, feedback headings and intro, section titles, pi's plan-mode framing, what pi is told when a plan is approved |
 
 Everything is saved as JSON in `$HERDR_APP_HOME/data/review/config.json`. The file holds only what differs from
 [`mod/config.defaults.json`](mod/config.defaults.json) and points at [`mod/config.schema.json`](mod/config.schema.json),

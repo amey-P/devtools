@@ -50,6 +50,7 @@ const PROMPTS = [
   ["pi plan mode", [
     ["prompts.pi.planMode", "When plan mode starts", "{tool}: the submit tool (submit_plan)"],
     ["prompts.pi.planOff", "When plan mode ends", ""],
+    ["prompts.pi.approved", "When a plan is approved", "{path}: the plan file · {tool}: the submit tool. Your notes follow it."],
   ]],
 ];
 
@@ -204,7 +205,7 @@ export class Settings {
 
   /** @param {string} path @returns {TextareaState} */
   textState(path) {
-    const multi = path === "prompts.pi.planMode" || path === "prompts.deny" || path === "prompts.approvedWithNotes";
+    const multi = path === "prompts.pi.planMode" || path === "prompts.pi.approved" || path === "prompts.deny" || path === "prompts.approvedWithNotes";
     const s = TextareaState.new({ rows: multi ? 3 : 1 });
     s.set_auto_grow(multi ? 3 : 1, 12);
     s.on("change", (_e, cx) => { if (this.filling || !this.loaded) return; this.setValue(path, s.value()); cx.notify(); });
