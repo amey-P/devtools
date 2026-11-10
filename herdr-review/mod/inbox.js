@@ -42,8 +42,6 @@ export class Inbox {
     this.closing = false;
     this.sz = scaler(null);
     cx.spawn(async (cx) => { try {
-      // Without a direct fs call first, this task stalls in the app's runtime and the inbox stays on "Loading…".
-      await fs.exists(spool());
       this.cfg = await readConfig();
       this.sz = scaler(this.cfg);
       await this.load();

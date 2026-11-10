@@ -28,17 +28,19 @@ export const ago = (ms) => {
 // Only if config.defaults.json can't be read: enough to open a window.
 const FALLBACK = { window: { place: "float", width: 0.6, height: 0.8, focus: true, arrive: "open" },
   ui: { font: "", textSize: 0, contentWidth: 860, sidebarWidth: 320, sidebar: "auto", readingTime: true }, prompts: null };
-let defaults = null;
+// Read on every call, never cached: in the Herdr runtime a task spawned in a new window's init stalls forever if its
+// first await settles without a host call while another window closes in the same turn. A cached value made
+// `await readConfig()` exactly that.
 export async function configDefaults() {
-  defaults ??= await readJson(`${appHome()}/mods/review/config.defaults.json`);
-  return defaults ?? FALLBACK;
+  return (await readJson(`${appHome()}/mods/review/config.defaults.json`)) ?? FALLBACK;
 }
 export const configPath = () => `${appHome()}/data/review/config.json`;
 /** config.json as written (an empty object when missing). */
 export const readConfigFile = async () => (await readJson(configPath())) ?? {};
 /** The settings in effect: {window, ui, prompts} (prompts is null without the defaults file). */
 export async function readConfig() {
-  return core.merge(await configDefaults(), await readConfigFile());
+  const [d, raw] = await Promise.all([configDefaults(), readConfigFile()]);
+  return core.merge(d, raw);
 }
 /** Saves settings `cfg` (keeping only what differs from the defaults, and keys this version doesn't know). */
 export async function writeConfig(cfg) {
