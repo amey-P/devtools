@@ -3,25 +3,38 @@
 // Kinds (what is reviewed) and modes (how it ends):
 //   plan   an agent's plan (bin/bridge.mjs, from the Claude hook / pi submit_plan)   decision: Approve / Request changes
 //   ask    an agent ran bin/review.mjs                                              decision with --wait, else send
+//   choice an agent asks the person to pick (AskUserQuestion, pi ask_user, ask.mjs)  decision: Submit (choice.js)
 //   file   props {kind: "file", file, on?}: a file, live-reloaded (markdown's Review)  send
 //   reply  props {kind: "reply"}: the last reply of the agent in this tab (ctrl-shift-r)  send
 // Bridge-made reviews get props {id}; the request lives in <app home>/data/review/<id>/ (see bridge.mjs).
 // Placement (bin/config.mjs, <app home>/data/review/config.json): a floating window (default), a split or a tab.
-// Opened with `mod.open {name: "review"}` (no props, as an overlay), this copy is the launcher: it opens the
-// floating windows the bridge queued in data/review/.float/, or, with none queued, the reply review of the
-// focused tab where the config says (ctrl-shift-r), then closes itself.
+// Opened with `mod.open {name: "review"}` (no props, as an overlay), this copy is the launcher: it takes the reviews
+// the bridge queued in data/review/.float/ and decides how each arrives, without interrupting:
+//   arrive "inbox"            a toast; it waits in the inbox
+//   on another workspace      a pill at the top of the window (pill.js); click it, or go to that workspace, to open it
+//   here, place "float"       a floating window that fades in and leaves the keyboard where it is
+//   here, a split or tab      meta {here, back}: the bridge opens it beside the agent and gives focus back
+// With none queued, it opens the reply review of the focused tab where the config says (ctrl-shift-r). Then it closes.
+// Props {gentle: true}: a review that arrived on its own fades in and doesn't take the keyboard.
 // Floating copies get props {float: true, overlay}: drag them by the header; ✕ or Esc closes.
 // Send mode types the feedback into the agent's terminal (hc send) and stays open for another round.
 //
 // Hover a block: a toolbar offers Comment · Delete · Replace. Select part of a block, ⌘C, then
 // "Use copied text" in the note narrows the quote to that span.
+// A ```choice block (blocks.js) shows its options as chips: a click picks (a "choice" annotation, sent like the others,
+// with Request changes or Approve with notes).
 // Keys while the pane has focus: ⌘Enter saves the open note, else requests changes / sends;
-// ⌘⇧Enter approves (again on the "approve with notes?" prompt: approve with notes); Esc cancels.
+// ⌘⇧Enter approves; with notes it opens the Approve menu, and again approves with the notes; Esc cancels.
+// The decision buttons follow the state (see renderDecision): no notes, Approve leads; with notes, Request changes
+// leads and Approve becomes "Approve with notes ▾" (discarding the notes is only in its menu); while a note is
+// being written, both wait.
+// Motion (ui.js Appear/fadeIn): new notes, the editor, the hover toolbar and the result fade in; the sidebar slides;
+// a floating window fades out as it closes.
 // Bindable commands: review.submit (⌘Enter's behaviour), .send, .approve, .deny, .general, .sidebar, .refresh, .settings.
 // Settings (⚙ in the header, settings.js): the window, the look (ui.*) and what the agent is told (prompts.*), saved to
 // <app home>/data/review/config.json; every open review re-reads it when it changes (watchConfig).
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover } from "gpui-base";
 import * as fs from "fs/promises";
 import {
   props, theme, settings, agents, panes, focused, appHome, home, exec, hc, notify, nextCommand, watchFolder, readTextFile,
@@ -31,12 +44,14 @@ import { splitBlocks, plain } from "./blocks.js";
 import { toMarkdown, ordered } from "./feedback.js";
 import {
   AGENT_NAMES, base, safe, green, tint, clip, readJson, plural, ago, readConfig, stopPress, store, icon, wash, dot, badge, btn,
-  spool, isReviewId, openReviewWindow, openInboxAction, scaler, withFont, fillText,
+  spool, isReviewId, openReviewWindow, openInboxAction, scaler, withFont, fillText, Appear, fadeIn, chevron, SOFT, QUICK,
 } from "./ui.js";
 import { Inbox } from "./inbox.js";
 import { Settings } from "./settings.js";
+import { Pill } from "./pill.js";
+import { ChoiceForm } from "./choice.js";
 
-const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST" };
+const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST", choice: "DECISION" };
 const MARKDOWN = /\.(md|mdx|markdown|txt|text)$/i;
 const dirOf = (f) => f.replace(/[\\/][^\\/]*$/, "") || "/";
 const expand = (f) => (f && f.startsWith("~/") ? home() + f.slice(1) : f);
@@ -53,8 +68,12 @@ const KINDS = {
   delete: { icon: "trash", label: "Delete", verb: "Delete" },
   replace: { icon: "pencil", label: "Replace", verb: "Replace" },
   general: { icon: "globe", label: "Global", verb: "Global comment" },
+  choice: { icon: "check", label: "Decision", verb: "Decision" },
 };
 const WIDE = 940;
+const PILL = { width: 340, height: 40 };
+/** @type {import("./types").Motion} */
+const ENTER = { duration: 240, easing: "ease-out" };
 
 export default class Review extends View {
   init(_props, cx) {
@@ -62,19 +81,28 @@ export default class Review extends View {
     // The settings as their own floating window (settings.js).
     if (p.settings && p.float) { this.settingsWindow = new Settings(p.overlay ?? null, cx); return; }
     // mod.open with no props: the launcher (see the top of this file).
-    if (p.overlay && !p.id && !p.kind && !p.float) {
+    if (p.overlay && !p.id && !p.kind && !p.float && !p.pill) {
       this.launcher = true;
-      cx.spawn(async () => this.launch(p.overlay));
+      // The launcher is window-sized (mod.json overlay 1×1): its first size centres the pill.
+      this.winSize = null;
+      this.sized = new Promise((resolve) => { this.onSized = resolve; });
+      cx.spawn(async (cx) => this.runLauncher(p.overlay, cx));
       return;
     }
+    // The arrival pill (pill.js): reviews that came in while the person was on another workspace.
+    if (p.pill) { this.arrivalPill = new Pill(p.overlay ?? null, cx); return; }
     // The review inbox (opened by the review-inbox mod): a list, not a review.
     if (p.inbox) { this.inbox = new Inbox(p.overlay ?? null, cx); return; }
     this.id = p.id ?? null;
     this.overlay = p.overlay ?? null;  // set when this copy is a floating window
     this.floating = !!this.overlay;
     this.closing = false;
+    // Arrived on its own (not opened by the person): fade in, and leave the keyboard where it is.
+    this.gentle = !!p.gentle;
+    this.appear = new Appear(cx); // entrances (ui.js)
+    this.leaving = false;         // a floating window fading out before it closes
     this.h = cx.focus_handle();
-    this.h.focus();  // now, so Esc closes the window even while it loads
+    if (!this.gentle) this.h.focus();  // now, so Esc closes the window even while it loads
     // A person-launched review (no spool request): what to show, and where its draft lives.
     this.launch = !this.id && (p.kind === "file" || p.kind === "reply") ? { kind: p.kind, file: expand(p.file ?? null), on: p.on ?? null } : null;
     this.pane = p.pane ?? focused()?.pane ?? null;
@@ -88,13 +116,15 @@ export default class Review extends View {
     this.req = null;
     this.error = null;
     this.blocks = [];
+    /** @type {import("./types").Annotation[]} */
     this.anns = [];
     this.status = "loading";   // loading | open | sent | cancelled
     this.sent = null;          // the decision this pane wrote or found
     this.editing = null;       // {ann: id | null, block, type, quote, state}
     this.hovered = -1;
     this.selected = null;      // annotation id picked in the sidebar
-    this.confirm = false;      // approve with annotations: ask what to do with them
+    this.approveMenu = false;  // the Approve ▾ menu (approve with notes / discard them) is open
+    this.editSeq = 0;          // each editor that opens is new (it fades in)
     this.width = 0;
     this.seq = 0;
     this.side = store.get("side"); // "1" | "0" | null (null: open when wide)
@@ -111,7 +141,8 @@ export default class Review extends View {
       catch (e) { this.error = `Couldn't open this review: ${e?.message ?? e}`; this.status = "cancelled"; this.req = null; this.launch = null; cx.notify(); return; }
       if (this.id && this.status === "open") this.markSeen({ opened_at: Date.now() });
       cx.notify();
-      if (this.cfg?.window?.focus !== false) this.h.focus();
+      if (this.cfg?.window?.focus !== false && !this.gentle) this.h.focus();
+      if (this.id && !this.floating) this.recordOwnPane();
       this.watchConfig(cx);
       if (this.id) this.watchSpool(cx);
       if (this.liveFile) this.watchFile(cx);
@@ -137,28 +168,39 @@ export default class Review extends View {
   }
 
   /** The launcher: opens what the bridge queued (or the reply review), then closes itself. */
-  async launch(self) {
+  async runLauncher(self, cx) {
     const cfg = await readConfig();
     const spool = `${appHome()}/data/review`;
     const queue = `${spool}/.float`;
     let ids = [];
     try { ids = (await fs.readdir(queue)).filter(isReviewId); } catch {}
     const size = { width: cfg.window.width, height: cfg.window.height };
+    let pill = false;
     for (const id of ids) {
       try { await fs.unlink(`${queue}/${id}`); } catch { continue; } // another launcher took it
       const req = await readJson(`${spool}/${id}/request.json`);
       if (!req) continue;
+      const meta = (m) => fs.writeFile(`${spool}/${id}/meta.json`, JSON.stringify(m)).catch(() => {});
       if (cfg.window.arrive === "inbox") {
         // Quiet arrival: a toast, and the review waits in the inbox until it's opened.
         const who = AGENT_NAMES[req.agent] ?? AGENT_NAMES[req.parent?.app] ?? "An agent";
-        notify({ title: req.kind === "plan" ? `Plan from ${who}` : `Review request from ${who}`,
+        notify({ title: req.kind === "plan" ? `Plan from ${who}` : req.kind === "choice" ? `Question from ${who}` : `Review request from ${who}`,
           body: `${req.title ?? "Review"}: waiting in the review inbox.`, level: "info", action: openInboxAction });
-        await fs.writeFile(`${spool}/${id}/meta.json`, JSON.stringify({ inbox: true, pane: null })).catch(() => {});
+        await meta({ inbox: true, pane: null });
         continue;
       }
-      // One spot per agent: its next review opens where this one was dropped.
-      await openReviewWindow(id, req, cfg);
+      const f = focused();
+      if (req.space && f?.space && f.space !== req.space) {
+        // The person is elsewhere: don't pull them away. The pill waits for them.
+        await meta({ pill: true, pane: null });
+        pill = true;
+        continue;
+      }
+      // Here: open quietly. One spot per agent: its next floating review opens where this one was dropped.
+      if (cfg.window.place === "float") await openReviewWindow(id, req, cfg, { gentle: true });
+      else await meta({ here: true, back: f?.pane ?? null });
     }
+    if (pill) await this.openPill(cx);
     if (!ids.length) {
       const f = focused();
       const reply = { kind: "reply", pane: f?.pane ?? null, tab: f?.tab ?? null };
@@ -169,11 +211,41 @@ export default class Review extends View {
     closeOverlay(self);
   }
 
-  /** A floating window closes itself (once). */
+  /** Opens (or refreshes, in place) the arrival pill, centred at the top of the window. */
+  async openPill(cx) {
+    await Promise.race([this.sized, new Promise((r) => cx.timer.after(300, () => r()))]);
+    const w = this.winSize?.width ?? 1200;
+    openOverlay({ kind: "window", frame: "none", mod: "review", props: { pill: true }, key: "review-pill",
+      at: { x: Math.max(8, Math.round((w - PILL.width) / 2)), y: 10 }, ...PILL });
+  }
+
+  /** A review in a split or tab that the pill (or inbox) opened: run() couldn't say which pane it got, so record it
+   *  here for the bridge to close after a decision. The bridge records its own splits (meta {here} → {pane}). */
+  async recordOwnPane() {
+    const meta = await readJson(`${this.dir}/meta.json`);
+    if (!meta?.opening || meta.pane) return;
+    let ids = [];
+    try { ids = (await fs.readdir(spool())).filter((n) => isReviewId(n) && n !== this.id); } catch {}
+    const claimed = new Set((await Promise.all(ids.map((n) => readJson(`${spool()}/${n}/meta.json`)))).map((m) => m?.pane).filter(Boolean));
+    const mine = panes().filter((x) => x.mod === "review" && !claimed.has(x.pane));
+    const pane = mine.find((x) => x.focused) ?? mine[mine.length - 1];
+    if (!pane) return;
+    this.pane = pane.pane;
+    this.tab = this.req?.tab ?? pane.tab;
+    await fs.writeFile(`${this.dir}/meta.json`, JSON.stringify({ pane: pane.pane, tab: pane.tab })).catch(() => {});
+  }
+
+  /** A floating window closes itself (once), after a short fade. */
   closeWindow() {
     if (!this.floating || this.closing) return;
     this.closing = true;
-    closeOverlay(this.overlay);
+    const acx = this.appear?.acx;
+    try {
+      if (!acx) throw 0;
+      this.leaving = true;
+      acx.notify();
+      acx.timer.after(QUICK.duration + 20, () => closeOverlay(this.overlay));
+    } catch { closeOverlay(this.overlay); }
   }
 
   /** After a decision, a floating window shows the result for a moment, then goes. */
@@ -184,10 +256,12 @@ export default class Review extends View {
 
   async close() {
     if (this.launcher) return;
+    if (this.arrivalPill) { this.arrivalPill.close(); return; }
     if (this.settingsWindow) { this.settingsWindow.release(); return; }
     if (this.inbox) { this.inbox.close(); return; }
     this.settings?.release();
     this.editing?.state.release();
+    this.choice?.release();
     // Closed without a decision: later. The agent keeps waiting and the review stays in the inbox
     // (Dismiss is the way to let the agent fall back to its own prompt).
     if (this.status === "open" && this.id) await this.markSeen({ deferred_at: Date.now() });
@@ -267,8 +341,12 @@ export default class Review extends View {
       await fs.mkdir(this.dir, { recursive: true }).catch(() => {});
     }
     const draft = await readJson(`${this.dir}/draft.json`);
-    if (Array.isArray(draft)) {
+    if (this.kind === "choice") {
+      this.choice = new ChoiceForm(this.req?.questions ?? [], draft?.choice ?? null,
+        { onChange: () => this.saveDraft(), refocus: () => this.h.focus() });
+    } else if (Array.isArray(draft)) {
       this.anns = draft;
+      for (const a of draft) { this.appear.mark(`note-${a.id}`); this.appear.mark(`side-${a.id}`); }
       this.seq = draft.reduce((m, a) => Math.max(m, Number(String(a.id).slice(1)) || 0), draft.length);
     }
     this.lastSent = (await readJson(`${this.dir}/sent.json`)) ?? null;
@@ -358,10 +436,16 @@ export default class Review extends View {
 
   /** The ⚙ button: the settings screen in place of the document, and back. */
   toggleSettings(cx) {
+    // Whichever comes back in (the document or the settings) fades in.
+    this.appear.forget("body");
+    this.appear.forget("settings");
     if (this.settings) { this.settings.release(); this.settings = null; this.h.focus(); }
     else {
       if (this.editing) this.saveEdit(cx);
-      this.settings = new Settings(null, cx, { onClose: () => { this.settings?.release(); this.settings = null; this.h.focus(); cx.notify(); } });
+      this.approveMenu = false;
+      this.settings = new Settings(null, cx, { onClose: () => {
+        this.settings?.release(); this.settings = null; this.appear.forget("body"); this.h.focus(); cx.notify();
+      } });
     }
     cx.notify();
   }
@@ -416,7 +500,8 @@ export default class Review extends View {
   }
 
   saveDraft() {
-    fs.writeFile(`${this.dir}/draft.json`, JSON.stringify(this.anns)).catch(() => {});
+    const draft = this.choice ? { choice: this.choice.toDraft() } : this.anns;
+    fs.writeFile(`${this.dir}/draft.json`, JSON.stringify(draft)).catch(() => {});
   }
 
   /** How the feedback is headed for this kind of review. */
@@ -444,11 +529,11 @@ export default class Review extends View {
   dropEditor() {
     this.editing?.state.release();
     this.editing = null;
-    this.confirm = false;
+    this.approveMenu = false;
   }
 
   startEdit(block, type, cx, ann = null) {
-    if (this.status !== "open") return;
+    if (this.status !== "open" || type === "choice") return;
     this.editing?.state.release();
     const b = block === null ? null : this.blocks[block];
     const value = ann?.text ?? (type === "replace" && b ? b.src : "");
@@ -459,9 +544,9 @@ export default class Review extends View {
     state.set_auto_grow(3, 14);
     // The textarea's own bindings take ⌘Enter before our key handler sees it: it arrives as a submit.
     state.on("submit", (e, cx) => { if (e?.secondary) { this.lastKey = Date.now(); this.saveEdit(cx); } });
-    this.editing = { ann: ann?.id ?? null, block, type, quote: ann?.quote ?? b?.src ?? null, state };
+    this.editing = { ann: ann?.id ?? null, block, type, quote: ann?.quote ?? b?.src ?? null, state, seq: ++this.editSeq };
     this.selected = ann?.id ?? null;
-    this.confirm = false;
+    this.approveMenu = false;
     cx.notify();
     cx.timer.after(30, () => state.focus());
   }
@@ -515,6 +600,23 @@ export default class Review extends View {
     });
   }
 
+  /** A click on option `label` of the ```choice block `i`: one pick per block (several when it's `choice multi`). */
+  pickOption(i, label, cx) {
+    if (this.status !== "open") return;
+    const b = this.blocks[i];
+    if (b?.kind !== "choice") return;
+    const prev = this.anns.find((a) => a.type === "choice" && a.block === i);
+    const had = new Set(prev?.picked ?? []);
+    if (b.multi) { if (had.has(label)) had.delete(label); else had.add(label); }
+    else { const again = had.has(label); had.clear(); if (!again) had.add(label); }
+    const picked = b.options.map((o) => o.label).filter((l) => had.has(l));
+    if (!picked.length) this.anns = this.anns.filter((a) => a !== prev);
+    else if (prev) this.anns = this.anns.map((a) => (a === prev ? { ...a, picked, text: picked.join(", "), quote: b.src } : a));
+    else this.anns.push({ id: `n${++this.seq}`, block: i, type: "choice", quote: b.src, question: b.question, picked, text: picked.join(", "), created: Date.now() });
+    this.saveDraft();
+    cx.notify();
+  }
+
   toggleSide(cx) {
     this.side = this.showSide ? "0" : "1";
     store.set("side", this.side);
@@ -545,6 +647,12 @@ export default class Review extends View {
     const who = this.agentName;
     const plan = this.kind === "plan";
     if (decision === "dismissed") { cx.notify(); return; }
+    if (decision === "answer") {
+      notify({ title: "Answer sent", body: `${who} can continue.`, level: "success", timeout: 3000 });
+      cx.notify();
+      this.closeSoon(cx);
+      return;
+    }
     notify({
       title: decision === "approve" ? (plan ? "Plan approved" : "Approved") : (plan ? "Changes requested" : "Feedback sent"),
       body: decision === "approve" ? (plan ? `${who} can start.` : `${who} can continue.`) : (plan ? `${who} will revise the plan.` : `${who} has your feedback.`),
@@ -588,11 +696,28 @@ export default class Review extends View {
     });
   }
 
+  /** A choice: send the answers once every question has one. */
+  submitChoice(cx) {
+    if (this.status !== "open" || !this.choice) return;
+    const f = this.choice;
+    if (!f.complete) {
+      const i = f.firstOpen;
+      if (i >= 0) { f.fq = i; f.fo = 0; }
+      notify({ title: "Review", body: `Answer every question first (${f.answered} of ${f.qs.length} answered).`, level: "info", timeout: 2500 });
+      cx.notify();
+      return;
+    }
+    const r = f.result();
+    cx.spawn(async (cx) => this.decide("answer", cx, r));
+  }
+
   approve(cx, mode = null) {
+    if (this.choice) { this.submitChoice(cx); return; }
     if (this.status !== "open" || this.mode !== "decision") return;
     if (this.editing) this.saveEdit(cx);
-    if (this.anns.length && !mode) { this.confirm = true; this.h.focus(); cx.notify(); return; }
-    this.confirm = false;
+    // With notes, a bare Approve asks how (the menu): it never drops them on its own.
+    if (this.anns.length && !mode) { this.approveMenu = true; cx.notify(); return; }
+    this.approveMenu = false;
     const n = this.cfg?.prompts?.notes?.[this.kind === "plan" ? "plan" : "other"]
       ?? (this.kind === "plan" ? { heading: "Implementation notes", intro: "Notes on the approved plan:" } : { heading: "Notes", intro: "Approved, with these notes:" });
     const notes = mode === "notes" ? toMarkdown(this.anns, { heading: fillText(n.heading), intro: fillText(n.intro), labels: this.framing.labels }) : "";
@@ -600,11 +725,12 @@ export default class Review extends View {
   }
 
   deny(cx) {
+    if (this.choice) { this.submitChoice(cx); return; }
     if (this.mode === "send") { this.send(cx); return; }
     if (this.status !== "open") return;
     if (this.editing) this.saveEdit(cx);
     if (!this.anns.length) { this.startEdit(null, "general", cx); return; }
-    this.confirm = false;
+    this.approveMenu = false;
     const feedback = this.feedback;
     cx.spawn(async (cx) => this.decide("deny", cx, { feedback }));
   }
@@ -619,13 +745,15 @@ export default class Review extends View {
 
   submitKey(cx) {
     if (!this.dedupe()) return;
+    if (this.choice) { this.submitChoice(cx); return; }
     if (this.editing) this.saveEdit(cx);
-    else if (!this.confirm) this.deny(cx);
+    else if (!this.approveMenu) this.deny(cx);
   }
 
   approveKey(cx) {
     if (this.mode !== "decision" || !this.dedupe()) return;
-    if (this.confirm) this.approve(cx, "notes");
+    if (this.choice) { this.submitChoice(cx); return; }
+    if (this.approveMenu) this.approve(cx, "notes");
     else this.approve(cx);
   }
 
@@ -662,15 +790,16 @@ export default class Review extends View {
   }
 
   color(type, t) {
-    return type === "delete" ? t.blocked : type === "replace" ? green(t) : type === "general" ? t.accent : t.ansi3;
+    return type === "delete" ? t.blocked : type === "replace" || type === "choice" ? green(t) : type === "general" ? t.accent : t.ansi3;
   }
 
   onKey(e, cx) {
     if (this.settings) return; // the settings screen has its own keys
     const k = e.keystroke.replace(/^ctrl-/, "cmd-");
+    if (this.choice && this.status === "open" && this.choice.onKey(k, cx)) { cx.stop_propagation(); cx.notify(); return; }
     if (k === "escape") {
       if (this.editing) this.cancelEdit(cx);
-      else if (this.confirm) { this.confirm = false; cx.notify(); }
+      else if (this.approveMenu) { this.approveMenu = false; cx.notify(); }
       else if (this.selected) { this.selected = null; cx.notify(); }
       else if (this.floating) this.later();
       else return;
@@ -681,13 +810,19 @@ export default class Review extends View {
   }
 
   render(cx) {
-    if (this.launcher) return div();
+    if (this.launcher) return div().id("launcher").size_full()
+      .on_size_change((size) => { if (!this.winSize) { this.winSize = size; this.onSized?.(); } });
+    if (this.arrivalPill) return this.arrivalPill.render(cx);
     if (this.settingsWindow) return withFont(div().size_full(), this.settingsWindow.saved).child(this.settingsWindow.render(theme()));
     if (this.inbox) return this.inbox.render(cx);
     const t = theme();
+    const shown = !this.leaving && (!this.gentle || this.appear.is("root"));
     const root = withFont(v_flex(), this.cfg).id("review").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 1) { this.width = size.width; cx.notify(); } })
       .on_key_down((e, cx) => this.onKey(e, cx))
+      // Fades in when it arrived on its own, and out as a floating window closes.
+      .opacity(shown ? 1 : 0).transition("opacity", this.leaving ? QUICK : ENTER)
+      .when(this.gentle, (el) => el.top(shown ? 0 : 10).transition("top", ENTER))
       // Clicks that land outside text and the editor give the keyboard back to the review.
       .on_mouse_down("left", () => this.h.focus());
     // The frame (header, ✕) draws straight away; only the body waits for load().
@@ -698,16 +833,20 @@ export default class Review extends View {
     if (!this.req && !this.launch) return root.items_center().justify_center().child(div().text_size(13).text_color(t.muted).child(this.error ?? "Nothing to review."));
     const wide = this.width >= WIDE;
     const side = this.showSide;
-    if (this.settings) return root.child(this.renderHeader(t)).child(div().flex_1().min_h(0).child(this.settings.render(t)));
+    if (this.settings) return root.child(this.renderHeader(t))
+      .child(fadeIn(div().flex_1().min_h(0), this.appear.is("settings"), 4).child(this.settings.render(t)));
+    // The sidebar stays drawn and slides: its width eases between 0 and its own.
+    const sw = this.cfg?.ui?.sidebarWidth ?? 320;
+    const drawer = div().id("pr-side-drawer").flex_none().h_full().overflow_hidden().w(side ? sw : 0).transition("width", SOFT)
+      .child(this.renderSide(t));
     return root
       .child(this.renderHeader(t))
-      .child(h_flex().flex_1().min_h(0).relative()
+      .child(fadeIn(h_flex().flex_1().min_h(0), this.appear.is("body"), 6)
         // A floating window drags by its header only: presses in the body stay here.
         .when(this.floating, (el) => el.on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); }))
         .child(this.renderDoc(t))
-        .when(side && wide, (el) => el.child(this.renderSide(t)))
-        .when(side && !wide, (el) => el.child(div().absolute().top(0).right(0).bottom(0).shadow_lg().child(this.renderSide(t)))))
-      .when(this.confirm, (el) => el.child(this.renderConfirm(t)));
+        .when(wide && !this.choice, (el) => el.child(drawer))
+        .when(!wide && !this.choice, (el) => el.child(div().absolute().top(0).right(0).bottom(0).when(side, (e) => e.shadow_lg()).child(drawer))));
   }
 
   renderHeader(t) {
@@ -728,8 +867,8 @@ export default class Review extends View {
           : n ? [t.accent, "Ready to send"]
           : this.lastSent ? [green(t), `Sent ${ago(this.lastSent.at)}${ago(this.lastSent.at) === "just now" ? "" : " ago"}`]
           : [t.accent, "Annotate, then send"])
-        : [t.accent, this.req?.created && ago(this.req.created) !== "just now" ? `Waiting ${ago(this.req.created)}` : "Awaiting your review"])
-      : d === "approve" ? [green(t), "Approved"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"];
+        : [t.accent, this.req?.created && ago(this.req.created) !== "just now" ? `Waiting ${ago(this.req.created)}` : this.choice ? "Waiting for your answer" : "Awaiting your review"])
+      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"];
     const tabAgents = sendMode && !this.id ? this.tabAgents : [];
     const counts = ["comment", "delete", "replace", "general"].map((k) => [k, this.anns.filter((a) => a.type === k).length]).filter(([, c]) => c);
     return h_flex().id("pr-head").relative().h(64).flex_none().pl(16).pr(10).gap(12).items_center().bg(t.chrome)
@@ -744,7 +883,7 @@ export default class Review extends View {
           .child(div().text_size(15).font_semibold().truncate().child(this.title))
           .when(!!this.req?.version && this.kind !== "file", (el) => el.child(div().flex_none().h(18).px(6).rounded(5).flex().items_center().text_size(10.5).font_semibold()
             .bg(t.raised).border_1().border_color(t.border).text_color(t.muted).child(`v${this.req.version}`)))
-          .when(this.newer, (el) => el.child(div().flex_none().on_mouse_down("left", stopPress).child(h_flex().id("pr-newer").flex_none().h(18).px(6).gap(4).rounded(5).items_center().text_size(10.5)
+          .when(this.newer, (el) => el.child(div().flex_none().on_mouse_down("left", stopPress).child(fadeIn(h_flex().id("pr-newer"), this.appear.is(`newer-${this.text?.length ?? 0}`), 3).flex_none().h(18).px(6).gap(4).rounded(5).items_center().text_size(10.5)
             .font_semibold().bg(tint(t.accent, "22")).text_color(t.accent).cursor_pointer().hover((s) => s.bg(tint(t.accent, "38")))
             .tooltip("A newer reply arrived. Load it (your annotations stay where their quote still fits)")
             .on_click((_e, cx) => { cx.spawn(async (cx) => this.reloadContent(cx, true)); })
@@ -757,10 +896,16 @@ export default class Review extends View {
           .when(!loading && !compact && counts.length > 0, (el) => el.child(div().flex_none().child("·"))
             .children(counts.map(([k, c]) => h_flex().flex_none().gap(3).items_center().text_color(this.color(k, t))
               .child(icon(KINDS[k].icon, 11)).child(String(c)))))
-          .when(!n && open && !compact, (el) => el.child(div().flex_none().child("·")).child(div().flex_none().child("No annotations")))))
+          .when(!!this.choice && open && !compact, (el) => el.child(div().flex_none().child("·"))
+            .child(div().flex_none().child(`${this.choice.answered} of ${plural(this.choice.qs.length, "question")} answered`)))
+          .when(!this.choice && !n && open && !compact, (el) => el.child(div().flex_none().child("·")).child(div().flex_none().child("No annotations")))))
       // Controls keep their presses (a floating window drags by the rest of the header).
       .child(h_flex().relative().flex_none().gap(12).items_center().on_mouse_down("left", stopPress)
-      .when(open, (el) => el
+      .when(open && !!this.choice, (el) => el.child(btn("pr-submit", t, { ic: "send", label: compact ? "Submit" : "Submit answer",
+        variant: "solid", color: t.accent, kbd: compact ? null : "⌘↵", disabled: !this.choice.complete,
+        tooltip: this.choice.complete ? `Send your answer to ${this.agentName}` : "Answer every question first",
+        onClick: (cx) => this.submitChoice(cx) })))
+      .when(open && !this.choice, (el) => el
         .child(btn("pr-general", t, { ic: "globe", label: compact ? null : "Global comment", tooltip: compact ? "Global comment" : null,
           onClick: (cx) => this.startEdit(null, "general", cx) }))
         .child(btn("pr-copy", t, { ic: "copy", tooltip: "Copy feedback as markdown", disabled: !n, onClick: (cx) => this.copyFeedback(cx) }))
@@ -770,17 +915,72 @@ export default class Review extends View {
         .when(sendMode, (el) => el.child(btn("pr-send", t, { ic: "send", label: this.sending ? "Sending…" : compact ? "Send" : `Send to ${this.agentName}`,
           variant: "solid", color: t.accent, kbd: compact ? null : "⌘↵", disabled: !n || !this.target || this.sending,
           onClick: (cx) => this.send(cx) })))
-        .when(!sendMode, (el) => el
-          .child(btn("pr-deny", t, { label: plan ? (compact ? "Changes" : "Request changes") : (compact ? "Feedback" : "Send feedback"),
-            variant: "outline", color: plan ? t.blocked : t.accent, kbd: compact ? null : "⌘↵", onClick: (cx) => this.deny(cx) }))
-          .child(btn("pr-approve", t, { ic: "check", label: plan ? "Approve" : "Looks good", variant: "solid", color: green(t), kbd: compact ? null : "⌘⇧↵",
-            onClick: (cx) => this.approve(cx) }))))
-      .when(!loading && !this.settings, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
+        .when(!sendMode, (el) => el.children(this.renderDecision(t, compact))))
+      .when(!loading && !this.settings && !this.choice, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
       .when(!loading, (el) => el.child(btn("pr-settings", t, { ic: "settings", active: !!this.settings, tooltip: this.settings ? "Back to the review" : "Settings", onClick: (cx) => this.toggleSettings(cx) })))
       .when(open && this.mode === "decision" && !!this.id, (el) => el.child(btn("pr-dismiss", t, { label: compact ? null : "Dismiss", ic: compact ? "trash" : null,
         tooltip: `Stop waiting here: ${this.agentName} falls back to its own prompt`, onClick: (cx) => this.dismiss(cx) })))
       .when(this.floating, (el) => el.child(btn("pr-close", t, { ic: "x",
         tooltip: open && this.id ? "Later: keep it in the review inbox (esc)" : "Close (esc)", onClick: () => this.later() }))));
+  }
+
+  /** Request changes · Approve, by state (see the top of this file):
+   *    writing a note   both wait (dimmed) until it's saved or cancelled
+   *    no notes         Approve leads (solid); Request changes is quiet (it starts a global comment)
+   *    notes            Request changes leads (solid, ⌘↵); Approve is "Approve with notes" + ▾ (with notes / discard) */
+  renderDecision(t, compact) {
+    const plan = this.kind === "plan";
+    const n = this.anns.length;
+    const writing = !!this.editing;
+    const wait = writing ? "Save or cancel the note first" : null;
+    const denyColor = plan ? t.blocked : t.accent;
+    const deny = btn("pr-deny", t, { label: plan ? (compact ? "Changes" : "Request changes") : (compact ? "Feedback" : "Send feedback"),
+      variant: n ? "solid" : "ghost", color: denyColor, kbd: compact || !n ? null : "⌘↵", disabled: writing,
+      tooltip: wait ?? (n ? null : `Add a global comment, then send it${plan ? " to revise the plan" : ""}`),
+      onClick: (cx) => this.deny(cx) });
+    const okLabel = plan ? "Approve" : "Looks good";
+    if (!n) {
+      return [deny, btn("pr-approve", t, { ic: "check", label: okLabel, variant: "solid", color: green(t), kbd: compact ? null : "⌘⇧↵",
+        disabled: writing, tooltip: wait, onClick: (cx) => this.approve(cx) })];
+    }
+    const g = green(t);
+    const main = btn("pr-approve", t, { ic: "check", label: compact ? okLabel : `${okLabel} with notes`, variant: "outline", color: g, split: true,
+      disabled: writing, tooltip: wait ?? `${okLabel}, and send your ${plural(n, "note")} for ${this.agentName} to follow`,
+      onClick: (cx) => this.approve(cx, "notes") });
+    const arrow = (open) => chevron("pr-approve-more", t, { color: g, disabled: writing, open, tooltip: writing ? wait : "More ways to approve" });
+    if (writing) return [deny, h_flex().flex_none().items_center().child(main).child(arrow(false))];
+    const menu = Popover.new("pr-approve-menu").anchor("top_right")
+      .open(this.approveMenu)
+      .on_open_change((open, cx) => { this.approveMenu = open; if (!open) this.appear.forget("approve-menu"); cx.notify(); })
+      .trigger(arrow(this.approveMenu))
+      .content(this.renderApproveMenu(t, okLabel));
+    return [deny, h_flex().flex_none().items_center().child(main).child(menu)];
+  }
+
+  renderApproveMenu(t, okLabel) {
+    const n = this.anns.length;
+    const g = green(t);
+    const shown = this.approveMenu && this.appear.is("approve-menu");
+    const item = (id, ic, color, title, sub, k, mode) => h_flex().id(id).gap(10).px(10).py(8).items_start().rounded(7).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.approveMenu = false; this.approve(cx, mode); })
+      .child(div().pt(1).text_color(color).child(icon(ic, 14)))
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(title))
+        .child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(sub)))
+      .when(!!k, (el) => el.child(div().pt(1).text_size(10.5).text_color(t.dim).child(k)));
+    return v_flex().id("pr-approve-list").mt(4).w(280).p(4).gap(2).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
+      .opacity(shown ? 1 : 0).transition("opacity", QUICK)
+      // The menu has the keyboard while it's open: ⌘⇧↵ again approves with the notes.
+      .on_key_down((e, cx) => {
+        const k = e.keystroke.replace(/^ctrl-/, "cmd-");
+        if (k === "cmd-shift-enter" && this.dedupe()) { this.approve(cx, "notes"); cx.stop_propagation(); }
+      })
+      .child(item("pr-am-notes", "check", g, `${okLabel} with notes`,
+        `${this.agentName} gets your ${plural(n, "note")} to follow${this.kind === "plan" ? " while implementing" : ""}.`, "⌘⇧↵", "notes"))
+      .child(div().mx(8).h(1).bg(t.border))
+      .child(item("pr-am-discard", "trash", t.muted, `${okLabel}, discard ${plural(n, "note")}`,
+        "Your notes are dropped and not sent.", null, "discard"));
   }
 
   /** Who asked for this review (or who feedback goes to), and where that agent is. Click: go to it. */
@@ -813,6 +1013,7 @@ export default class Review extends View {
     const steps = this.blocks.filter((b) => b.kind === "item").length;
     const sections = this.blocks.filter((b) => b.kind === "heading").length;
     const meta = (ic, text) => h_flex().gap(5).items_center().flex_none().child(icon(ic, 11)).child(text);
+    if (!general.length && !editingGeneral) this.appear.forget("general-card");
     return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar()
       .child(div().absolute().top(0).left(0).right(0).h(220).child(wash(tint(t.accent, "12"), tint(t.canvas, "00"), 180)))
       .child(v_flex().relative().w_full().max_w(this.cfg?.ui?.contentWidth ?? 860).mx_auto().px(narrow ? 10 : 28).pt(narrow ? 12 : 26).pb(110).gap(14)
@@ -825,32 +1026,37 @@ export default class Review extends View {
           .when(this.kind === "reply" && this.replySource === "screen", (el) => el.child(div().flex_none().text_color(t.dim)
             .tooltip("This agent doesn't report its replies, so this is its screen and recent history").child("from the screen")))
           .child(div().flex_1())
-          .when(sections > 0, (el) => el.child(meta("sidebar", plural(sections, "section"))))
-          .when(steps > 0, (el) => el.child(meta("check", plural(steps, "step"))))
-          .when(this.cfg?.ui?.readingTime !== false, (el) => el.child(meta("comment", `${Math.max(1, Math.round(words / 230))} min read`))))
-        .when(general.length > 0 || editingGeneral, (el) => el.child(v_flex().relative().gap(8).p(14).rounded(12)
+          .when(!!this.choice, (el) => el.child(meta("check", `${plural(this.choice?.qs.length ?? 0, "question")} · 1–9 pick · tab next · ⌘↵ submit`)))
+          .when(!this.choice && sections > 0, (el) => el.child(meta("sidebar", plural(sections, "section"))))
+          .when(!this.choice && steps > 0, (el) => el.child(meta("check", plural(steps, "step"))))
+          .when(!this.choice && this.cfg?.ui?.readingTime !== false, (el) => el.child(meta("comment", `${Math.max(1, Math.round(words / 230))} min read`))))
+        .when(general.length > 0 || editingGeneral, (el) => el.child(fadeIn(v_flex(), this.appear.is("general-card")).gap(8).p(14).rounded(12)
           .bg(t.background).border_1().border_color(tint(t.accent, "55")).shadow_sm()
           .child(wash(tint(t.accent, "14"), tint(t.background, "00"), 90))
           .child(h_flex().relative().gap(8).items_center().text_size(this.sz(11)).font_semibold().text_color(t.accent)
             .child(badge("globe", t.accent, 20, 11)).child("GLOBAL COMMENTS"))
           .children(general.map((a) => this.renderNote(a, t)))
           .when(editingGeneral, (el) => el.child(this.renderEditor(t)))))
-        .child(v_flex().relative().w_full().rounded(14).overflow_hidden()
+        .when(!!this.choice, (el) => el.child(div().w_full().opacity(open ? 1 : 0.6).transition("opacity", SOFT)
+          .when(this.choice?.qs.length === 0, (e) => e.child(div().py(30).text_center().text_size(this.sz(13)).text_color(t.dim).child("No questions to answer.")))
+          .child(this.choice ? this.choice.render(t, { open, sz: this.sz, narrow }) : div())))
+        .when(!this.choice, (el) => el.child(v_flex().relative().w_full().rounded(14).overflow_hidden()
           .bg(t.background).border_1().border_color(t.border).shadow_lg()
-          .when(!open, (el) => el.opacity(0.6))
+          // Dims (gently) once the review is decided.
+          .opacity(open ? 1 : 0.6).transition("opacity", SOFT)
           // Accent ribbon across the top of the page.
           .child(div().relative().w_full().h(3).flex_none().child(wash(t.accent, green(t), 90)))
           .child(v_flex().w_full().pl(narrow ? 8 : 18).pr(narrow ? 12 : 40).py(narrow ? 16 : 34).gap(2)
             .when(this.cfg?.ui?.textSize > 0, (el) => el.text_size(this.cfg.ui.textSize))
             .when(!this.blocks.length, (el) => el.child(div().py(30).text_center().text_size(this.sz(13)).text_color(t.dim).whitespace_normal()
               .child(this.error ?? (this.kind === "reply" ? `No reply from ${this.agentName} yet. It appears here after its next turn.` : "Nothing to review."))))
-            .children(this.blocks.map((b, i) => this.renderBlock(b, i, t))))));
+            .children(this.blocks.map((b, i) => this.renderBlock(b, i, t)))))));
   }
 
   renderSent(t) {
     const s = this.lastSent;
     const c = green(t);
-    return h_flex().relative().gap(12).items_center().px(16).py(12).rounded(12).bg(t.background)
+    return fadeIn(h_flex(), this.appear.is(`sent-${s.at}`)).gap(12).items_center().px(16).py(12).rounded(12).bg(t.background)
       .border_1().border_color(tint(c, "55")).shadow_sm()
       .child(wash(tint(c, "1e"), tint(t.background, "00"), 90))
       .child(div().relative().w(30).h(30).flex_none().rounded_full().bg(tint(c, "26")).text_color(c)
@@ -874,15 +1080,17 @@ export default class Review extends View {
     const d = this.sent ?? {};
     const who = this.agentName;
     const plan = this.kind === "plan";
-    const [color, ic, title, body] = d.decision === "approve"
+    const [color, ic, title, body] = d.decision === "answer"
+      ? [green(t), "check", "Answered", `${who} has your answer${this.choice?.summary() ? `: ${clip(this.choice.summary(), 120)}` : "."}`]
+      : d.decision === "approve"
       ? [green(t), "check", d.notes ? "Approved with notes" : plan ? "Plan approved" : "Approved",
         d.notes ? `${who} will follow your notes${plan ? " while implementing" : ""}.` : plan ? `${who} can start.` : `${who} can continue.`]
       : d.decision === "deny" ? [plan ? t.blocked : t.accent, "send", plan ? "Changes requested" : "Feedback sent",
         plan ? `Your feedback was sent. ${who} will revise the plan.` : `Your feedback was sent to ${who}.`]
-      : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : "review request"} replaced this review.`]
+      : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : this.choice ? "question" : "review request"} replaced this review.`]
       : d.decision === "dismissed" ? [t.dim, "x", "Closed", "Closed without a decision."]
       : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."];
-    return h_flex().relative().gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
+    return fadeIn(h_flex(), this.appear.is("result"), 8, { duration: 280, easing: "ease-out" }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
       .border_1().border_color(tint(color, "66")).shadow_md()
       .child(wash(tint(color, "26"), tint(t.background, "00"), 90))
       .child(div().relative().w(44).h(44).flex_none()
@@ -894,8 +1102,30 @@ export default class Review extends View {
         .child(div().text_size(this.sz(12.5)).text_color(t.muted).child(body)));
   }
 
+  /** The options of a ```choice block, as chips to click. */
+  renderChoiceBlock(b, i, t) {
+    const open = this.status === "open";
+    const picked = new Set(this.anns.find((a) => a.type === "choice" && a.block === i)?.picked ?? []);
+    const g = green(t);
+    return v_flex().w_full().gap(8).p(12).rounded(10).bg(t.surface).border_1().border_color(picked.size ? tint(g, "66") : t.border)
+      .child(h_flex().gap(8).items_center()
+        .child(badge("check", picked.size ? g : t.accent, 20, 11))
+        .child(div().flex_1().min_w(0).text_size(this.sz(14)).font_semibold().whitespace_normal().child(b.question))
+        .child(div().flex_none().text_size(this.sz(10.5)).text_color(t.dim).child(b.multi ? "Pick any" : "Pick one")))
+      .child(h_flex().w_full().flex_wrap().gap(6).pl(28).children(b.options.map((o, oi) => {
+        const on = picked.has(o.label);
+        return h_flex().id(`cb-${i}-${oi}`).gap(6).px(10).py(5).items_center().rounded(8).border_1()
+          .border_color(on ? g : t.border).bg(on ? tint(g, "1e") : t.background).text_size(this.sz(12.5))
+          .when(!!o.description, (el) => el.tooltip(o.description))
+          .when(open, (el) => el.cursor_pointer().hover((s) => s.border_color(tint(g, "aa")))
+            .on_click((_e, cx) => { cx.stop_propagation(); this.pickOption(i, o.label, cx); }))
+          .when(on, (el) => el.child(div().text_color(g).child(icon("check", 12))))
+          .child(div().font_medium().text_color(on ? t.foreground : t.muted).child(o.label));
+      })));
+  }
+
   renderBlock(b, i, t) {
-    const notes = this.anns.filter((a) => a.block === i);
+    const notes = this.anns.filter((a) => a.block === i && a.type !== "choice");
     const del = notes.find((a) => a.type === "delete");
     const rep = notes.find((a) => a.type === "replace");
     const com = notes.some((a) => a.type === "comment");
@@ -907,7 +1137,12 @@ export default class Review extends View {
     const struck = !!(del || rep);
     const heading = b.kind === "heading";
 
-    const toolbar = h_flex().absolute().top(heading ? 6 : 2).right(4).h(28).px(3).gap(1).items_center().rounded(8)
+    // The toolbar eases in (opacity, and 3px down into place) each time the block is hovered.
+    const tbKey = `tb-${i}`;
+    const tbShown = hover && !editingHere ? this.appear.is(tbKey) : (this.appear.forget(tbKey), false);
+    const tbTop = heading ? 6 : 2;
+    const toolbar = h_flex().absolute().top(tbShown ? tbTop : tbTop - 3).right(4).h(28).px(3).gap(1).items_center().rounded(8)
+      .opacity(tbShown ? 1 : 0).transition("opacity", QUICK).transition("top", QUICK)
       .bg(t.popover).border_1().border_color(t.border).shadow_md()
       .children(["comment", "delete", "replace"].map((k) => h_flex().id(`tb-${k}-${i}`).h(22).px(7).gap(5).items_center().rounded(5)
         .text_size(this.sz(11.5)).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
@@ -926,7 +1161,7 @@ export default class Review extends View {
         .when(b.kind === "quote", (el) => el.pl(10).border_l_2().border_color(tint(t.accent, "88")))
         // Text keeps its own presses (selection, ⌘C) instead of handing the keyboard to the root.
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-        .child(TextView.markdown(`b-${i}`, b.src).selectable(true)))
+        .child(b.kind === "choice" ? this.renderChoiceBlock(b, i, t) : TextView.markdown(`b-${i}`, b.src).selectable(true)))
       .when(hover && !editingHere, (el) => el.child(toolbar));
 
     // Left gutter: a marker in the annotation's colour, or a faint dot on hover.
@@ -964,7 +1199,7 @@ export default class Review extends View {
     const sel = this.selected === a.id;
     if (this.editing?.ann === a.id) return div();
     const text = a.type === "replace" ? (partial ? "" : "Replacement shown above.") : a.text.trim();
-    return v_flex().id(`note-${a.id}`).relative().gap(6).pl(14).pr(12).py(10).rounded(10).bg(t.surface).border_1()
+    return fadeIn(v_flex().id(`note-${a.id}`), this.appear.is(`note-${a.id}`)).gap(6).pl(14).pr(12).py(10).rounded(10).bg(t.surface).border_1()
       .border_color(sel ? color : t.border).shadow_sm()
       .when(open, (el) => el.cursor_pointer().hover((s) => s.border_color(tint(color, "aa")))
         .on_click((_e, cx) => this.startEdit(a.block, a.type, cx, a)))
@@ -990,7 +1225,7 @@ export default class Review extends View {
     const e = this.editing;
     const color = this.color(e.type, t);
     const partial = e.block !== null && e.quote && e.quote !== this.blocks[e.block]?.src;
-    return v_flex().id("pr-editor").relative().gap(10).p(14).rounded(12).bg(t.popover).border_1().border_color(color).shadow_lg()
+    return fadeIn(v_flex().id("pr-editor"), this.appear.is(`editor-${e.seq}`), 4).gap(10).p(14).rounded(12).bg(t.popover).border_1().border_color(color).shadow_lg()
       // The editor keeps its presses: the textarea holds the keyboard while it's open.
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .child(h_flex().gap(8).items_center()
@@ -1053,9 +1288,10 @@ export default class Review extends View {
     }
     return v_flex().p(10).gap(8).children(list.map((a) => {
       const color = this.color(a.type, t);
-      const where = a.type === "general" ? (this.kind === "plan" ? "Whole plan" : "Whole document") : clip(plain(a.quote ?? this.blocks[a.block]?.src ?? ""), 90);
+      const where = a.type === "general" ? (this.kind === "plan" ? "Whole plan" : "Whole document")
+        : a.type === "choice" ? clip(a.question ?? "", 90) : clip(plain(a.quote ?? this.blocks[a.block]?.src ?? ""), 90);
       const sel = this.selected === a.id;
-      return v_flex().id(`side-${a.id}`).relative().gap(6).pl(13).pr(10).py(10).rounded(10).bg(t.surface).border_1()
+      return fadeIn(v_flex().id(`side-${a.id}`), this.appear.is(`side-${a.id}`), 4).gap(6).pl(13).pr(10).py(10).rounded(10).bg(t.surface).border_1()
         .border_color(sel ? color : t.border).shadow_sm()
         .child(div().absolute().top(8).bottom(8).left(0).w(3).rounded(2).bg(color))
         .when(open, (el) => el.cursor_pointer().hover((s) => s.border_color(tint(color, "aa")))
@@ -1092,26 +1328,5 @@ export default class Review extends View {
         .child(btn("pr-prev-copy", t, { ic: "copy", label: "Copy", onClick: (cx) => this.copyFeedback(cx) })))
       .child(div().p(12).rounded(8).bg(t.background).border_1().border_color(t.border).text_size(this.sz(12.5))
         .child(TextView.markdown("pr-preview", md).selectable(true)));
-  }
-
-  renderConfirm(t) {
-    const n = this.anns.length;
-    return div().id("pr-modal").absolute().top(0).left(0).right(0).bottom(0).bg("#0000007a")
-      .flex().items_center().justify_center().on_mouse_down("left", stopPress)
-      .on_click((_e, cx) => { this.confirm = false; cx.notify(); })
-      .child(v_flex().id("pr-modal-card").relative().w(420).gap(14).p(22).rounded(16).bg(t.popover).border_1().border_color(tint(green(t), "55")).shadow_2xl()
-        .on_click((_e, cx) => cx.stop_propagation())
-        .child(div().absolute().top(0).left(0).right(0).h(90).rounded_t(16).child(wash(tint(green(t), "22"), tint(t.popover, "00"), 180)))
-        .child(h_flex().relative().gap(10).items_center()
-          .child(div().w(32).h(32).rounded_full().flex_none().bg(tint(green(t), "22")).text_color(green(t))
-            .flex().items_center().justify_center().child(icon("check", 16)))
-          .child(div().text_size(15).font_semibold().child("Approve with annotations?")))
-        .child(div().text_size(13).text_color(t.muted).whitespace_normal()
-          .child(`You have ${plural(n, "annotation")}. Send them to ${this.agentName} as notes to follow${this.kind === "plan" ? " while implementing" : ""}, or approve without them.`))
-        .child(h_flex().gap(8).items_center()
-          .child(btn("pr-c-cancel", t, { label: "Cancel", kbd: "esc", onClick: (cx) => { this.confirm = false; cx.notify(); } }))
-          .child(div().flex_1())
-          .child(btn("pr-c-discard", t, { label: "Discard notes", variant: "outline", color: t.muted, onClick: (cx) => this.approve(cx, "discard") }))
-          .child(btn("pr-c-notes", t, { label: "Approve with notes", variant: "solid", color: green(t), kbd: "⌘⇧↵", onClick: (cx) => this.approve(cx, "notes") }))));
   }
 }

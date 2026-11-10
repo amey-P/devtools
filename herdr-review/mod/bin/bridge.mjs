@@ -1,24 +1,31 @@
 // Review bridge: agents and scripts ask the herdr-app `review` mod to show something for review.
 //
 // Kinds: plan (an agent's plan, from the Claude hook / pi submit_plan), ask (an agent ran bin/review.mjs),
+//        choice (an agent asks the person to pick between options: Claude's AskUserQuestion, pi's ask_user, bin/ask.mjs),
 //        file and reply (opened by the person from Herdr; they don't go through this bridge).
 // Modes: decision (the caller waits for approve / deny) or send (feedback is typed into `target` later).
 //
 // Spool: <herdr-app home>/data/review/<id>/
 //   request.json   {id, kind, mode, agent, terminal, target, cwd, title, content, file, session, version, created, space, tab,
-//                   parent: {app, space_name, tab_name, name}, place}
+//                   parent: {app, space_name, tab_name, name}, place, questions?}
+//                  questions (choice): AskUserQuestion's shape, [{question, header, multiSelect, options: [{label, description, preview}]}]
 //   meta.json      {pane, tab} or {overlay}   where the review opened (a split / tab, or a floating window)
-// Float queue: <spool>/.float/<id>  the bridge asks the mod to open <id> as a floating window (mod.open review);
-//              the mod's launcher opens it, writes meta.json {overlay} and removes the marker.
-//   meta.json      {inbox: true} instead, when config `arrive` is "inbox": a toast, and it waits in the inbox
+// Arrival queue: <spool>/.float/<id>  every new review goes to the mod's launcher (mod.open review), which knows where the
+//              person is and removes the marker. It answers in meta.json:
+//                {overlay}           opened as a floating window (quietly: it doesn't take the keyboard)
+//                {inbox: true}       config `arrive` is "inbox": a toast, and it waits in the inbox
+//                {pill: true}        the person is on another workspace: a pill at the top waits for them (mod/pill.js)
+//                {here: true, back}  a split / tab on the person's workspace: the bridge opens it, then gives focus
+//                                    back to pane `back`
 //   draft.json     the mod's unsent annotations
 //   seen.json      {opened_at, deferred_at}: when the person opened it / closed it to come back later (the mod writes it)
 //   decision.json  {decision: "approve" | "deny" | "dismissed", feedback, notes, at}   (the mod writes it)
+//                  choice: {decision: "answer", answers: {[question]: "Label" | "A, B" | "free text"}, notes?: {[question]: text}, at}
 //   cancelled      the caller stopped waiting (interrupted, or a newer request replaced this one)
 // Replies: <herdr-app home>/data/review/replies/<terminal>.json  {agent, text, at}  (agent hooks write it)
 //
 // States (mod/ui.js readReview; the review inbox lists them): pending (decision mode, no decision.json, no cancelled),
-// draft / open (send mode, with / without unsent notes), approved, changes, sent, dismissed, replaced, interrupted.
+// draft / open (send mode, with / without unsent notes), approved, changes, answered, sent, dismissed, replaced, interrupted.
 // Closing an undecided review (✕, Esc) is "later": nothing is written but seen.json, and the caller keeps waiting.
 // Only Dismiss (decision.json "dismissed") lets the caller fall back to its own prompt.
 //
@@ -123,8 +130,8 @@ async function closePane(dir) {
   else if (meta?.pane) await doCmd("pane.close", { pane: meta.pane });
 }
 
-/** Asks the mod's launcher to open review `id` as a floating window; true once it did. */
-async function openFloating(id, dir) {
+/** Hands review `id` to the mod's launcher; its answer (meta.json, see the top of this file), or null. */
+async function openViaLauncher(id, dir) {
   mkdirSync(FLOAT_QUEUE, { recursive: true });
   const marker = join(FLOAT_QUEUE, id);
   writeFileSync(marker, String(Date.now()));
@@ -133,38 +140,47 @@ async function openFloating(id, dir) {
     const r = await doCmd("mod.open", { name: MOD });
     if (r.ok) {
       for (let waited = 0; waited < 1500; waited += 100) {
-        const meta = readJson(join(dir, "meta.json"));
-        if (meta?.overlay || meta?.inbox) return true;
+        const meta = answered(dir);
+        if (meta) return meta;
         await sleep(100);
       }
     }
   }
   rmSync(marker, { force: true });
+  return answered(dir);
+}
+
+function answered(dir) {
   const meta = readJson(join(dir, "meta.json"));
-  return !!(meta?.overlay || meta?.inbox);
+  return meta?.overlay || meta?.inbox || meta?.pill || meta?.here ? meta : null;
 }
 
 /** Opens review `id` where `place` says; falls back to a split, then a tab. False when nothing opened. */
 async function openPlaced(where, id, dir, kind, place, arrive) {
-  const props = { id };
-  // Quiet arrival goes through the mod's launcher too: it posts the toast instead of opening a window.
-  if ((place === "float" || arrive === "inbox") && await openFloating(id, dir)) return true;
+  // The launcher decides (it sees where the person is): a window, a toast, a pill, or "here" for a split / tab.
+  const meta = await openViaLauncher(id, dir);
+  if (meta && !meta.here) return true;
+  // "here": open beside the agent without moving the person's focus. No answer: the old way (show and focus).
+  const gentle = !!meta?.here;
+  const props = gentle ? { id, gentle: true } : { id };
   if (place !== "tab" && where.entry?.pane) {
-    // Show and focus the caller's own pane first, so the split can't land beside
-    // whatever pane the person happens to be working in.
-    await doCmd("pane.focus", { pane: where.entry.pane });
+    // Not gentle: show and focus the caller's own pane first, so the split can't land beside
+    // whatever pane the person happens to be working in. Gentle: the pane is given, so no need.
+    if (!gentle) await doCmd("pane.focus", { pane: where.entry.pane });
     const opened = await doCmd("pane.split", { pane: where.entry.pane, direction: place === "down" ? "down" : "right", mod: MOD, props });
-    if (opened.ok && await recordOpened(dir, opened)) return true;
+    if (opened.ok && await recordOpened(dir, opened, gentle ? meta.back : undefined)) return true;
   }
   const opened = await doCmd("tab.new", { space: where.space.id, mod: MOD, props, name: TAB_NAMES[kind] ?? "Review" });
-  return opened.ok && await recordOpened(dir, opened);
+  return opened.ok && await recordOpened(dir, opened, gentle ? meta.back : undefined);
 }
 
-async function recordOpened(dir, opened) {
+/** Records where the review opened. `back` (gentle): give focus back to that pane instead of focusing the review. */
+async function recordOpened(dir, opened, back) {
   let made = {};
   try { made = JSON.parse(opened.stdout); } catch {}
   writeFileSync(join(dir, "meta.json"), JSON.stringify({ pane: made.pane ?? null, tab: made.tab ?? null }));
-  if (made.pane) await doCmd("pane.focus", { pane: made.pane });
+  if (back !== undefined) { if (back) await doCmd("pane.focus", { pane: back }); }
+  else if (made.pane) await doCmd("pane.focus", { pane: made.pane });
   return true;
 }
 
@@ -172,17 +188,60 @@ function cancel(dir, reason) {
   try { writeFileSync(join(dir, "cancelled"), reason); } catch {}
 }
 
-const TAB_NAMES = { plan: "Plan review", ask: "Review", file: "Review", reply: "Review" };
+const TAB_NAMES = { plan: "Plan review", ask: "Review", choice: "Decision", file: "Review", reply: "Review" };
+
+// ---- choices -------------------------------------------------------------------
+
+/** Keeps the questions the review can show (AskUserQuestion's shape): each needs text and at least one option. */
+export function normalizeQuestions(questions) {
+  if (!Array.isArray(questions)) return [];
+  const str = (v) => (typeof v === "string" ? v.trim() : "");
+  return questions.map((q) => ({
+    question: str(q?.question),
+    header: str(q?.header),
+    multiSelect: !!q?.multiSelect,
+    options: (Array.isArray(q?.options) ? q.options : [])
+      .map((o) => (typeof o === "string" ? { label: o.trim() } : { label: str(o?.label), description: str(o?.description) || undefined, preview: str(o?.preview) || undefined }))
+      .filter((o) => o.label),
+  })).filter((q) => q.question && q.options.length);
+}
+
+/** The questions as markdown: the review's `content` (copy, the inbox, and anything that only reads text). */
+export function questionsMarkdown(questions) {
+  return questions.map((q) => [
+    `## ${q.header ? `${q.header}: ` : ""}${q.question}`, "",
+    ...q.options.map((o) => `- ${q.multiSelect ? "[ ] " : ""}**${o.label}**${o.description ? `: ${o.description}` : ""}`),
+  ].join("\n")).join("\n\n");
+}
+
+/** The answers as markdown, for agents that take text (pi, the CLI's --text, Claude's fallback). */
+export function answersText(questions, answers, notes) {
+  return questions.map((q) => {
+    const a = answers?.[q.question];
+    const n = notes?.[q.question];
+    return [`- ${q.question}`, `  → ${a?.trim() ? a.trim() : "(no answer)"}`, ...(n?.trim() ? [`  Note: ${n.trim().replace(/\n/g, "\n  ")}`] : [])].join("\n");
+  }).join("\n");
+}
+
+/** Asks the person to choose (kind "choice"): waits for {decision: "answer", answers, notes} or "dismissed"; null when
+ *  this isn't a Herdr app terminal or there's nothing to ask. */
+export function askChoice({ questions, agent = null, title, cwd, session, place, signal, handleSignals = false }) {
+  const qs = normalizeQuestions(questions);
+  if (!qs.length) return Promise.resolve(null);
+  const t = title || (qs.length === 1 ? (qs[0].header || qs[0].question) : `${qs.length} questions`);
+  return openReview({ kind: "choice", mode: "decision", agent, questions: qs, content: questionsMarkdown(qs),
+    title: t.length > 80 ? t.slice(0, 79) + "…" : t, cwd, session, place, signal, handleSignals });
+}
 
 /**
  * Opens a review for the calling terminal: a floating window, a split or a tab (config.mjs; `place` overrides). In decision mode, waits for the decision.
  * `handleSignals`: a standalone process (the Claude hook, the CLI) cancels the review when killed.
- * @param {{kind?: "plan"|"ask", mode?: "decision"|"send", agent?: string, content: string, title?: string,
+ * @param {{kind?: "plan"|"ask"|"choice", mode?: "decision"|"send", agent?: string, content: string, title?: string, questions?: object[],
  *          file?: string, cwd?: string, session?: string, target?: string, place?: "float"|"right"|"down"|"tab",
  *          signal?: AbortSignal, handleSignals?: boolean}} o
  */
 export async function openReview({ kind = "plan", mode = "decision", agent = null, content, title, file = null, cwd, session,
-  target, place, signal, handleSignals = false }) {
+  target, place, signal, handleSignals = false, questions }) {
   const terminal = process.env.HC_TERMINAL_ID;
   if (!terminal || !content?.trim()) return null;
   const lsr = await herdrApp(["ls"]);
@@ -210,6 +269,7 @@ export async function openReview({ kind = "plan", mode = "decision", agent = nul
     parent: { app: where.entry?.app ?? null, space_name: where.space.name ?? null, tab_name: where.tab.name ?? null,
       name: where.entry?.name ?? null },
     place: cfg.window.place,
+    ...(questions ? { questions } : {}),
   };
   writeFileSync(join(dir, "request.json"), JSON.stringify(request, null, 2));
 

@@ -1,7 +1,7 @@
 {
   "name": "herdr-review",
-  "version": "0.3.2",
-  "description": "Plan review in the Herdr app: when Claude exits plan mode inside Herdr, the plan opens in a pane beside it to annotate, approve or send back. Outside Herdr, Claude's normal prompt shows.",
+  "version": "0.4.0",
+  "description": "Plan review and quick decisions in the Herdr app: when Claude exits plan mode inside Herdr, the plan opens beside it to annotate, approve or send back; when it asks a question (AskUserQuestion), the options open there to click. Outside Herdr, Claude's normal prompts show.",
   "author": {
     "name": "Amey Patil"
   }

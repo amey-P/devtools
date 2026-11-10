@@ -4,10 +4,10 @@
 // Edits are a draft until Save; Save writes only what differs from the defaults, and every open review and inbox
 // picks the change up (they watch data/review).
 import { div } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState, Textarea, TextareaState } from "gpui-base";
+import { v_flex, h_flex, Input, InputState, Textarea, TextareaState, Scrollbar } from "gpui-base";
 import { theme, fonts, notify, closeOverlay } from "herdr";
 import * as core from "./config-core.js";
-import { configDefaults, configPath, readConfig, writeConfig, tint, btn, icon, wash, stopPress, scaler, withFont } from "./ui.js";
+import { configDefaults, configPath, readConfig, writeConfig, tint, btn, icon, wash, stopPress, scaler, withFont, Appear, fadeIn, SOFT, QUICK } from "./ui.js";
 
 const TABS = [["window", "Window"], ["ui", "Appearance"], ["prompts", "Agent text"]];
 const PLACE_LABELS = { float: "Floating", right: "Split right", down: "Split down", tab: "Tab" };
@@ -15,6 +15,7 @@ const ARRIVE_LABELS = { open: "Open it", inbox: "Wait in the inbox" };
 const SIDEBAR_LABELS = { auto: "When wide", open: "Open", closed: "Closed" };
 
 // The Agent text tab: [section, [path, label, what it's for / its placeholders]].
+/** @type {[string, [string, string, string][]][]} */
 const PROMPTS = [
   ["Plan decisions", [
     ["prompts.deny", "Plan sent back", "Goes before your feedback when you request changes on a plan."],
@@ -31,6 +32,7 @@ const PROMPTS = [
   ]],
   ["Feedback sections", [
     ["prompts.feedback.sections.on", "A comment", "{quote}: the start of the annotated text"],
+    ["prompts.feedback.sections.decision", "A pick in a choice block", "{quote}: the question"],
     ["prompts.feedback.sections.remove", "A deletion", ""],
     ["prompts.feedback.sections.change", "A replacement", ""],
     ["prompts.feedback.sections.general", "Global comments, after the others", ""],
@@ -48,6 +50,11 @@ const PROMPTS = [
   ]],
 ];
 
+// The font list: row height (28 + 1 gap), how tall it gets, and how many fonts it draws before "keep typing".
+const FONT_ROW = 29;
+const FONT_LIST_H = 240;
+const FONT_CAP = 200;
+
 const NUMBER_FIELDS = ["window.width", "window.height", "ui.contentWidth", "ui.sidebarWidth"];
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const sameText = (a, b) => core.text(a) === core.text(b);
@@ -58,6 +65,7 @@ export class Settings {
     this.overlay = overlay;
     this.onClose = onClose;
     this.h = cx.focus_handle();
+    this.appear = new Appear(cx); // the tab body and the font list fade / grow in
     this.tab = "window";
     this.loaded = false;
     this.inputs = {};       // path → InputState | TextareaState
@@ -191,7 +199,7 @@ export class Settings {
       .child(this.renderHeader(t))
       .child(div().id("settings-body").flex_1().min_h(0).overflow_y_scrollbar()
         .on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); })
-        .child(v_flex().w_full().max_w(720).mx_auto().px(20).py(16).gap(4).child(body)))
+        .child(fadeIn(v_flex().id(`settings-tab-${this.tab}`), this.appear.is(`tab-${this.tab}`), 4).w_full().max_w(720).mx_auto().px(20).py(16).gap(4).child(body)))
       .child(this.renderFooter(t));
   }
 
@@ -201,7 +209,7 @@ export class Settings {
       return h_flex().id(`st-tab-${id}`).h(24).px(10).items_center().rounded(6).text_size(12).font_medium().cursor_pointer()
         .text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.background).shadow_sm())
         .hover((s) => s.text_color(t.foreground))
-        .on_click((_e, cx) => { this.tab = id; this.fontOpen = false; cx.notify(); })
+        .on_click((_e, cx) => { if (this.tab !== id) this.appear.forget(`tab-${id}`); this.tab = id; this.fontOpen = false; cx.notify(); })
         .child(label);
     };
     return v_flex().relative().flex_none().bg(t.chrome).border_b_1().border_color(t.border)
@@ -274,7 +282,7 @@ export class Settings {
     return div().id(`st-${path}`).relative().w(34).h(20).rounded_full().cursor_pointer()
       .bg(on ? t.accent : t.raised).border_1().border_color(on ? t.accent : t.border)
       .on_click((_e, cx) => { this.setValue(path, !on); cx.notify(); })
-      .child(div().absolute().top(2).left(on ? 16 : 2).w(14).h(14).rounded_full().bg(on ? t.background : t.muted));
+      .child(div().id(`st-${path}-knob`).absolute().top(2).left(on ? 16 : 2).transition("left", SOFT).w(14).h(14).rounded_full().bg(on ? t.background : t.muted));
   }
 
   number(t, path, unit) {
@@ -300,9 +308,9 @@ export class Settings {
       .child(this.section(t, "Where reviews open", "Agents can still ask for a place per review, and $HERDR_REVIEW_PLACE overrides this for a session."))
       .child(this.row(t, "window.place", "Open reviews as", "A split or tab opens beside the agent that asked. If a floating window can't open, it falls back to a split, then a tab.",
         this.segmented(t, "window.place", PLACE_LABELS), { stacked: true }))
-      .child(this.row(t, "window.arrive", "When a review arrives", "“Wait in the inbox” shows a toast instead of a window (ctrl-shift-i opens the inbox).",
+      .child(this.row(t, "window.arrive", "When a review arrives", "“Open” opens quietly beside you; if you're on another workspace, a pill at the top waits for you. “Wait in the inbox” shows a toast instead (ctrl-shift-i opens the inbox).",
         this.segmented(t, "window.arrive", ARRIVE_LABELS)))
-      .child(this.row(t, "window.focus", "Take the keyboard", "The review gets keyboard focus when it opens.", this.toggle(t, "window.focus")))
+      .child(this.row(t, "window.focus", "Take the keyboard", "Reviews you open yourself (the pill, the inbox, ctrl-shift-r) get keyboard focus. Ones that arrive on their own never take it.", this.toggle(t, "window.focus")))
       .child(this.section(t, "Floating window size", "Pixels (200 or more), or a share of the Herdr window (0 to 1, e.g. 0.6). Applies to the next window that opens."))
       .child(this.row(t, "window.width", "Width", "", this.number(t, "window.width", "px or 0–1")))
       .child(this.row(t, "window.height", "Height", "", this.number(t, "window.height", "px or 0–1")));
@@ -328,6 +336,7 @@ export class Settings {
       .bg(t.background).cursor_pointer().text_size(13).min_w(180)
       .on_click((_e, cx) => {
         this.fontOpen = !this.fontOpen;
+        this.appear.forget("font-list");
         if (this.fontOpen) cx.spawn(async () => this.fontQuery.focus());
         cx.notify();
       })
@@ -336,7 +345,7 @@ export class Settings {
     if (!this.fontOpen) return button;
     const q = (this.fontQuery?.value() ?? "").trim().toLowerCase();
     const matches = this.allFonts.filter((f) => !q || f.toLowerCase().includes(q));
-    const shown = matches.slice(0, 60);
+    const shown = matches.slice(0, FONT_CAP);
     const item = (name, label) => {
       const on = (cur || "") === name;
       return h_flex().id(`st-font-${name || "default"}`).h(28).px(10).items_center().rounded(6).cursor_pointer().text_size(13)
@@ -345,18 +354,29 @@ export class Settings {
         .child(div().flex_1().truncate().when(!!name, (el) => el.font_family(name)).child(label ?? name))
         .when(on, (el) => el.child(div().text_color(t.accent).child(icon("check", 12))));
     };
+    const rows = [
+      ...(!q ? [item("", "Theme default")] : []),
+      ...shown.map((f) => item(f)),
+      ...(matches.length > shown.length ? [div().px(10).py(6).text_size(11.5).text_color(t.dim)
+        .child(`${matches.length - shown.length} more: keep typing to narrow it down`)] : []),
+      ...(!matches.length ? [div().px(10).py(6).text_size(12).text_color(t.dim).child("No font matches")] : []),
+    ];
+    // A definite height with the scroll area pinned inside it (absolute, inset 0) and its own bar: a max-height
+    // scroll area nested in the settings' scroll area never got a viewport of its own, so it didn't scroll.
+    // Grows open from 0 the first frame.
+    const grown = this.appear.is("font-list");
+    const height = grown ? Math.min(FONT_LIST_H, rows.length * FONT_ROW + 4) : 0;
     return v_flex().gap(6).w_full()
       .child(button)
       .child(v_flex().p(6).gap(4).rounded(8).border_1().border_color(t.border).bg(t.popover ?? t.background)
         .child(h_flex().h(28).px(8).items_center().rounded(6).border_1().border_color(t.border).bg(t.background)
           .child(Input.new(this.fontQuery).flex_1().h_full().text_size(12.5)))
-        .child(div().id("st-font-list").max_h(240).overflow_y_scrollbar()
-          .child(v_flex().gap(1)
-            .when(!q, (el) => el.child(item("", "Theme default")))
-            .children(shown.map((f) => item(f)))
-            .when(matches.length > shown.length, (el) => el.child(div().px(10).py(6).text_size(11.5).text_color(t.dim)
-              .child(`${matches.length - shown.length} more: keep typing to narrow it down`)))
-            .when(!matches.length, (el) => el.child(div().px(10).py(6).text_size(12).text_color(t.dim).child("No font matches"))))));
+        .child(div().id("st-font-frame").relative().w_full().overflow_hidden().h(height).opacity(grown ? 1 : 0)
+          .transition("height", SOFT).transition("opacity", QUICK)
+          // The list takes the wheel: the settings page doesn't scroll along with it.
+          .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+          .child(v_flex().id("st-font-list").absolute().inset_0().overflow_y_scroll().gap(1).pr(8).children(rows))
+          .child(Scrollbar.vertical("st-font-list").absolute().inset_0())));
   }
 
   preview(t) {
@@ -387,4 +407,5 @@ export class Settings {
 }
 
 /** The settings as their own floating window (one at a time); mod-settings/main.js opens the same. */
+/** @type {import("herdr").OverlaySpec} */
 export const SETTINGS_WINDOW = { kind: "window", mod: "review", props: { settings: true, float: true }, key: "review-settings", width: 680, height: 0.8 };

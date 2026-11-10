@@ -2,7 +2,7 @@
 import { div, svg, PathBuilder, Background } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { appHome, openOverlay } from "herdr";
+import { appHome, openOverlay, agents, run } from "herdr";
 import * as core from "./config-core.js";
 export const ICONS = "mods/review/icons";
 export const AGENT_NAMES = { claude: "Claude Code", "claude-code": "Claude Code", pi: "pi", codex: "Codex" };
@@ -77,6 +77,49 @@ export const RECT = () => PathBuilder.fill().move_to("0%", "0%").line_to("100%",
 export const wash = (from, to, angle = 90) =>
   window.paint_path(RECT(), Background.linear_gradient(angle, from, to).color_space("oklab")).absolute().top(0).left(0).size_full();
 
+// ---- motion ------------------------------------------------------------------
+// Native transitions only animate a *later* change of target: an element that is new draws one frame at its start
+// value (hidden), then `Appear` flips it to shown and the transition carries it in.
+/** @type {import("./types").Motion} */
+export const SOFT = { duration: 200, easing: "ease-out" };
+/** @type {import("./types").Motion} */
+export const QUICK = { duration: 140, easing: "ease-out" };
+
+export class Appear {
+  /** `cx`: any context of the view that draws the elements (init's, or a handler's): its tasks redraw that view. */
+  constructor(cx) {
+    this.on = new Set();      // keys drawn shown
+    this.pending = new Set(); // keys drawn hidden once, shown next frame
+    this.acx = null;
+    cx.spawn(async (acx) => { this.acx = acx; });
+  }
+  /** False the first time `key` is asked about (draw it hidden), true from the next frame on. */
+  is(key) {
+    if (this.on.has(key)) return true;
+    if (!this.acx) { this.on.add(key); return true; } // no clock yet: just show it
+    if (!this.pending.size) {
+      try {
+        this.acx.timer.after(16, (cx) => {
+          for (const k of this.pending) this.on.add(k);
+          this.pending.clear();
+          cx.notify();
+        });
+      } catch { this.on.add(key); return true; }
+    }
+    this.pending.add(key);
+    return false;
+  }
+  /** Already shown, no entrance (e.g. notes restored from a draft). */
+  mark(key) { this.on.add(key); }
+  /** Gone: the next time it's drawn it comes in again. */
+  forget(key) { this.on.delete(key); this.pending.delete(key); }
+}
+
+/** Fades `el` in and lifts it `dy` px into place once `shown`. */
+/** @type {<E extends import("gpui-kit").Element>(el: E, shown: boolean, dy?: number, policy?: import("./types").Motion) => E} */
+export const fadeIn = (el, shown, dy = 6, policy = SOFT) => el.relative().top(shown ? 0 : dy).opacity(shown ? 1 : 0)
+  .transition("opacity", policy).transition("top", policy);
+
 // A status dot; `pulse` breathes a halo around it (native loop, no timer).
 export function dot(color, pulse = false, size = 8) {
   return div().relative().flex_none().w(size).h(size)
@@ -96,16 +139,23 @@ export function kbd(text, color) {
 }
 
 // variant: ghost | outline | solid. `color` tints outline and solid.
-export function btn(id, t, { label, ic, variant = "ghost", color, kbd: k, disabled = false, active = false, tooltip, onClick }) {
+// `split`: the left half of a split button (square right corners); `chevron` is the right half.
+/**
+ * @param {string} id
+ * @param {Record<string, import("gpui-kit").Color>} t
+ * @param {import("./types").BtnOpts} opts
+ */
+export function btn(id, t, { label, ic, variant = "ghost", color, kbd: k, disabled = false, active = false, tooltip, onClick, split = false }) {
   const c = color ?? t.foreground;
   const fg = variant === "solid" ? t.background : variant === "outline" ? c : active ? t.foreground : t.muted;
-  let el = h_flex().id(id).h(28).flex_none().items_center().gap(6).rounded(7).text_size(12.5).font_medium()
+  let el = h_flex().id(id).h(28).flex_none().items_center().gap(6).text_size(12.5).font_medium()
     .px(label ? 10 : 7).text_color(fg);
+  el = split ? el.rounded_l(7) : el.rounded(7);
   if (variant === "solid") el = el.bg(c).border_1().border_color(c);
   else if (variant === "outline") el = el.border_1().border_color(tint(c, "77"));
   else el = el.when(active, (e) => e.bg(t.selected));
-  return el
-    .when(disabled, (e) => e.opacity(0.4))
+  // Enabling / disabling eases rather than snaps.
+  return el.opacity(disabled ? 0.4 : 1).transition("opacity", QUICK)
     .when(!disabled, (e) => e.cursor_pointer()
       .hover((s) => (variant === "solid" ? s.opacity(0.88) : variant === "outline" ? s.bg(tint(c, "1a")) : s.bg(t.hover).text_color(t.foreground)))
       .on_click((_e, cx) => onClick(cx)))
@@ -115,6 +165,22 @@ export function btn(id, t, { label, ic, variant = "ghost", color, kbd: k, disabl
     .when(!!k, (e) => e.child(kbd(k, fg)));
 }
 
+/** The right half of a split button (pairs with `btn(..., {split: true})`): a ▾ that opens a menu. The press is the
+ *  Popover's (it wraps this as its trigger), so there is no click handler here. */
+export function chevron(id, t, { variant = "outline", color, disabled = false, open = false, tooltip }) {
+  const c = color ?? t.foreground;
+  const fg = variant === "solid" ? t.background : c;
+  let el = h_flex().id(id).h(28).w(24).flex_none().items_center().justify_center().rounded_r(7).text_size(9).text_color(fg);
+  // Solid: a 1px gap from the left half is the divider. Outline: the left half's right border is.
+  if (variant === "solid") el = el.ml(1).bg(c).border_1().border_color(c);
+  else el = el.border_1().border_l_0().border_color(tint(c, "77")).when(open, (e) => e.bg(tint(c, "1a")));
+  return el.opacity(disabled ? 0.4 : 1).transition("opacity", QUICK)
+    .when(!disabled, (e) => e.cursor_pointer()
+      .hover((s) => (variant === "solid" ? s.opacity(0.88) : s.bg(tint(c, "1a")))))
+    .when(!!tooltip, (e) => e.tooltip(tooltip))
+    .child(open ? "▴" : "▾");
+}
+
 // ---- spool -------------------------------------------------------------------
 
 export const spool = () => `${appHome()}/data/review`;
@@ -122,17 +188,33 @@ export const isReviewId = (n) => /^(rv|pr)-[\w-]+$/.test(n);
 export const openInboxAction = { name: "mod.open", args: { name: "review-inbox" } };
 
 /** Opens (or reopens) review `id` as a floating window, one spot per agent, and records where it is
- *  so the bridge can close it after a decision. Returns the overlay id. */
-export async function openReviewWindow(id, req, cfg) {
-  const overlay = openOverlay({ kind: "window", mod: "review", props: { id, float: true },
+ *  so the bridge can close it after a decision. `extra`: more props ({gentle: true}: fade in, leave the keyboard).
+ *  Returns the overlay id. */
+export async function openReviewWindow(id, req, cfg, extra = {}) {
+  const overlay = openOverlay({ kind: "window", mod: "review", props: { id, float: true, ...extra },
     key: `review-${safe(req?.terminal ?? id)}`, width: cfg.window.width, height: cfg.window.height });
   await fs.writeFile(`${spool()}/${id}/meta.json`, JSON.stringify({ overlay, pane: null })).catch(() => {});
   return overlay;
 }
 
+/** Opens review `id` where the settings say: a floating window, or beside its agent (a split, else a tab in its
+ *  space). A split or tab can't report its pane here (run() returns nothing): the review records it itself
+ *  (main.js recordOwnPane). `gentle`: fade in and leave the keyboard where it is (and the person where they are). */
+export async function openReviewPlaced(id, req, cfg, { gentle = false } = {}) {
+  const props = gentle ? { id, gentle: true } : { id };
+  const place = cfg.window.place;
+  if (place === "float") return openReviewWindow(id, req, cfg, gentle ? { gentle: true } : {});
+  await fs.writeFile(`${spool()}/${id}/meta.json`, JSON.stringify({ pane: null, opening: Date.now() })).catch(() => {});
+  const pane = agents().find((a) => a.address === req?.terminal)?.pane;
+  if (!gentle && req?.terminal) run("agent.focus", { terminal: req.terminal });
+  if (place !== "tab" && pane) run("pane.split", { pane, direction: place === "down" ? "down" : "right", mod: "review", props });
+  else run("tab.new", { space: req?.space, mod: "review", props, name: req?.kind === "plan" ? "Plan review" : req?.kind === "choice" ? "Decision" : "Review" });
+  return null;
+}
+
 /** Where review `id` stands, from its spool files (see bin/bridge.mjs):
  *  pending (an agent waits for a decision) · draft (send mode, unsent notes) · open (send mode, nothing unsent)
- *  · approved · changes · sent · dismissed · replaced · interrupted. Null when it has no request. */
+ *  · approved · changes · answered (a choice) · sent · dismissed · replaced · interrupted. Null when it has no request. */
 export async function readReview(id) {
   const dir = `${spool()}/${id}`;
   const req = await readJson(`${dir}/request.json`);
@@ -143,6 +225,7 @@ export async function readReview(id) {
   const notes = Array.isArray(draft) ? draft.length : 0;
   let state;
   if (decision?.decision === "approve") state = "approved";
+  else if (decision?.decision === "answer") state = "answered";
   else if (decision?.decision === "deny") state = req.mode === "send" ? "sent" : "changes";
   else if (decision?.decision === "dismissed") state = "dismissed";
   else if (cancelled) state = cancelled === "replaced" ? "replaced" : "interrupted";

@@ -162,6 +162,46 @@ export default function (pi) {
   });
 
   pi.registerTool({
+    name: "ask_user",
+    label: "Ask the user",
+    executionMode: "sequential",
+    description:
+      "Ask the user one or more quick questions with options to pick, in the Herdr app (a decision between approaches, " +
+      "a choice of library, which items to include). Blocks until they answer. They can always answer in their own words " +
+      "(Other) and add a note. Use it instead of asking in prose when you have concrete options; keep options short and distinct.",
+    parameters: Type.Object({
+      questions: Type.Array(Type.Object({
+        question: Type.String({ description: "The full question, ending with a question mark." }),
+        header: Type.Optional(Type.String({ description: "A very short label for it (max 12 chars), e.g. \"Database\"." })),
+        multiSelect: Type.Optional(Type.Boolean({ description: "Allow several options (default false)." })),
+        options: Type.Array(Type.Object({
+          label: Type.String({ description: "The option, 1-5 words." }),
+          description: Type.Optional(Type.String({ description: "What picking it means, trade-offs." })),
+          preview: Type.Optional(Type.String({ description: "Markdown shown beside the options while this one is focused (code, a mockup)." })),
+        }), { minItems: 2, maxItems: 9 }),
+      }), { minItems: 1, maxItems: 4 }),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const text = (t) => ({ content: [{ type: "text", text: t }], details: undefined });
+      let bridge;
+      try { bridge = await import(pathToFileURL(BRIDGE).href); }
+      catch { return text("The Herdr review isn't installed here. Ask the user in chat."); }
+      if (typeof bridge.askChoice !== "function") return text("The installed Herdr review is too old for questions. Ask the user in chat.");
+      let r;
+      try {
+        r = await bridge.askChoice({ questions: params?.questions, agent: "pi", cwd: ctx.cwd,
+          session: ctx.sessionManager?.getSessionFile?.() ?? null, signal });
+      } catch (e) {
+        if (signal?.aborted) return text("The question was interrupted.");
+        throw e;
+      }
+      if (!r) return text("Not running inside the Herdr app (or no valid questions). Ask the user in chat.");
+      if (r.decision !== "answer") return text("The user dismissed the question without answering. Ask them in chat how to proceed.");
+      return text(`The user answered:\n\n${bridge.answersText(bridge.normalizeQuestions(params?.questions), r.answers, r.notes)}`);
+    },
+  });
+
+  pi.registerTool({
     name: TOOL,
     label: "Submit plan",
     executionMode: "sequential",

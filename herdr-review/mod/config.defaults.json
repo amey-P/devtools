@@ -38,6 +38,7 @@
         "remove": "Remove this",
         "change": "Change this",
         "on": "Feedback on: \"{quote}\"",
+        "decision": "Decision: \"{quote}\"",
         "general": "General feedback",
         "generalOnly": "Feedback"
       }

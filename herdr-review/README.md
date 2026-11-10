@@ -1,7 +1,8 @@
 # herdr-review
 
 Review documents and agent plans natively in the [Herdr app](https://herdr.dev): a pane beside
-the agent to annotate, approve or send feedback. One repo, three install targets:
+the agent to annotate, approve or send feedback. Agents can also ask **quick decisions**: options to click, answered in
+seconds. One repo, three install targets:
 
 | Path | Installs to | How |
 |---|---|---|
@@ -26,24 +27,77 @@ node install.mjs status           # exit 0 when everything is current
 
 ## Configure
 
-Reviews open as a **floating window** by default. Drag it by its header. The header names the agent that asked for
+Reviews open as a **floating window** by default. Drag it by its header.
+
+**Gentle arrivals.** A review an agent asks for never takes over the screen:
+
+- On the agent's workspace it fades in where `window.place` says, and the keyboard stays where it was.
+- On another workspace nothing opens. A small **pill** slides in at the top of the window with a pulsing dot. Click
+  it to open the review: the floating window, or (split/tab) Herdr takes you to the agent with the review beside it.
+  Switch to that workspace yourself and it opens there quietly. ✕ on the pill sends it to the inbox; `+N` opens the
+  inbox when several are waiting.
+
+ The header names the agent that asked for
 the review and where it lives (`from Claude Code · space › tab`). Click that to jump to the agent.
 
 **Later, not now.** ✕ or Esc closes the window but keeps the review: the agent keeps waiting (the Claude hook allows
 4 days) and your notes stay. **Dismiss** is the old close: the agent stops waiting and falls back to its own
 prompt (Claude's plan dialog, for example).
 
+**Approve follows your notes.** With no annotations, **Approve** is the main button (⌘⇧↵) and *Request changes*
+stays quiet (it starts a global comment). Once you've annotated, *Request changes* leads (⌘↵) and Approve becomes
+**Approve with notes ▾**, so a stray click can't throw your notes away. The ▾ menu also offers *Approve, discard
+notes*; ⌘⇧↵ opens that menu, and ⌘⇧↵ again approves with the notes. While a note is being written, both buttons wait
+until you save or cancel it.
+
+Inside the pane, things ease in and out instead of popping: new notes and the editor fade in, the block toolbar
+appears softly on hover, the sidebar slides, the result card settles in once you decide, and a floating window
+fades out as it closes.
+
+## Quick decisions
+
+Some questions need a pick, not an annotation. A **decision** opens like a review (the same window, pill, inbox and
+Dismiss/later rules) and shows one card per question: options to click (radio, or checkboxes for *pick any*), an
+**Other…** row for your own words, and *Add a note*. An option's preview (code, a mockup) shows beside the options while
+it's hovered. Keys: `1–9` pick, `0` Other, ↑↓ move, space/↵ pick, tab next question, ⌘↵ submit.
+
+They come from:
+
+- **Claude Code**: its `AskUserQuestion` tool. The plugin's PermissionRequest hook opens the questions in Herdr and
+  hands the answers back as the tool's `answers`. Dismiss falls back to Claude's own dialog. If your Claude version
+  ignores hook answers, set `HERDR_REVIEW_ASK=deny` to deliver them as a message instead.
+- **pi**: the `ask_user` tool.
+- **Anything else**: `mod/bin/ask.mjs` waits and prints the answers as JSON (exit 2 dismissed, 3 not in Herdr):
+
+  ```sh
+  node mod/bin/ask.mjs "Which database?" -o Postgres -o "SQLite:zero setup" [--multi] [--header DB] [--text]
+  node mod/bin/ask.mjs spec.json        # {"questions": [...]} in AskUserQuestion's shape, or - for stdin
+  ```
+
+**Choices inside a document.** A plan or document can carry decisions too: a fence with the info string `choice`
+(`choice multi` for several picks) shows its options as chips to click:
+
+````md
+```choice
+Which storage backend?
+- Postgres: durable, needs a server
+- SQLite: zero setup
+```
+````
+
+A pick is sent with the rest of your feedback (`Decision: "…"` · `Picked: …`), on Request changes or Approve with notes.
+
 ## Review inbox
 
 `ctrl-shift-i` opens the **review inbox**, a floating window that lists every review from the last week:
 
-- **Needs you**: plans and asks an agent is waiting on (oldest first), then documents with unsent notes or
+- **Needs you**: plans, asks and decisions an agent is waiting on (oldest first), then documents with unsent notes or
   feedback not yet sent.
-- **Resolved**: approved, changes requested, sent, dismissed, replaced.
+- **Resolved**: approved, changes requested, answered, sent, dismissed, replaced.
 
 Resubmitted versions fold into the newest one (`v3 · 3 versions`). Click a row, or press ↵, to reopen it where you
 left off. Each row has buttons to go to its agent, dismiss it while the agent waits, or discard it once it's done.
-↑↓ select, tab cycles All · Plans · Asks, and Esc closes the inbox. A review whose agent is gone (killed without
+↑↓ select, tab cycles All · Plans · Asks · Decisions, and Esc closes the inbox. A review whose agent is gone (killed without
 cleaning up) shows as *Agent gone*. Discard it.
 
 To keep new reviews from popping up at all, set **When a review arrives → Wait in the inbox** in Settings

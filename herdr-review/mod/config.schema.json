@@ -336,6 +336,21 @@
                   "description": "A comment. {quote}: the start of the annotated text.",
                   "default": "Feedback on: \"{quote}\""
                 },
+                "decision": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "description": "A pick in a ```choice block. {quote}: its question.",
+                  "default": "Decision: \"{quote}\""
+                },
                 "general": {
                   "anyOf": [
                     {

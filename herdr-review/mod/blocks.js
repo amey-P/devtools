@@ -1,7 +1,14 @@
 // Splits a markdown plan into annotatable blocks.
 //   splitBlocks(text) -> [{ kind, src, line, level }]
 // Kinds: heading, item (one list item, any depth, with its continuation lines), code, table,
-//        quote, rule, para. `level`: list nesting depth (0 for everything else).
+//        quote, rule, para, choice. `level`: list nesting depth (0 for everything else).
+// A choice is a fence with the info string `choice` (or `choice multi`): a question the reader answers by picking.
+//   ```choice
+//   Which storage backend?
+//   - Postgres: durable, needs a server
+//   - SQLite: zero setup
+//   ```
+// It carries {question, options: [{label, description}], multi}.
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const HEADING = /^ {0,3}#{1,6}(\s|$)/;
 const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+/;
@@ -30,7 +37,10 @@ export function splitBlocks(text) {
       const mark = fence[1];
       let j = i + 1;
       while (j < lines.length && !lines[j].trimStart().startsWith(mark)) j++;
-      push("code", i, Math.min(j + 1, lines.length));
+      const info = l.trim().slice(mark.length).trim().toLowerCase().split(/\s+/);
+      const choice = info[0] === "choice" ? parseChoice(lines.slice(i + 1, j), info.includes("multi")) : null;
+      if (choice) out.push({ kind: "choice", src: lines.slice(i, Math.min(j + 1, lines.length)).join("\n"), line: i, level: 0, ...choice });
+      else push("code", i, Math.min(j + 1, lines.length));
       i = j + 1;
       continue;
     }
@@ -81,6 +91,23 @@ export function splitBlocks(text) {
     push("para", i, j); i = j;
   }
   return out;
+}
+
+/** A choice fence's body: question lines, then `- label: description` options. Null without a question and an option. */
+function parseChoice(body, multi) {
+  const q = [];
+  const options = [];
+  for (const raw of body) {
+    const l = raw.trim();
+    if (!l) continue;
+    const m = /^(?:[-*+]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?(.+)$/.exec(l);
+    if (m) {
+      const t = m[1].replace(/^\*\*(.+?)\*\*/, "$1");
+      const k = t.search(/:\s|\s[—–-]\s/);
+      options.push(k > 0 ? { label: t.slice(0, k).trim(), description: t.slice(k).replace(/^(:|\s[—–-])\s*/, "").trim() } : { label: t.trim() });
+    } else if (!options.length) q.push(l.replace(/^#+\s*/, ""));
+  }
+  return q.length && options.length ? { question: q.join(" "), options, multi } : null;
 }
 
 const leading = (s) => s.replace(/\t/g, "    ").length - s.replace(/\t/g, "    ").trimStart().length;

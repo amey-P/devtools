@@ -31,6 +31,7 @@ const DESC = {
   "prompts.feedback.file": "For a file or an agent's review request. {name}: file name or title · {path}: file path.",
   "prompts.feedback.sections": "Section headings, one per annotation.",
   "prompts.feedback.sections.on": "A comment. {quote}: the start of the annotated text.",
+  "prompts.feedback.sections.decision": "A pick in a ```choice block. {quote}: its question.",
   "prompts.notes": "Approve with notes: the notes' heading and intro.",
   "prompts.pi": "pi's plan mode.",
   "prompts.pi.planMode": "Told to pi when plan mode starts. {tool}: the submit tool.",

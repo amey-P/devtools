@@ -1,6 +1,6 @@
 ---
 name: request-review
-description: Ask the user to review and annotate a document in the Herdr app (a draft, spec, design note, long answer or any markdown/text file) and get their feedback back. Use when the user asks you to "send it for review", "let me annotate it", or when you want structured feedback on a written artifact before continuing. Only works inside a Herdr app terminal (HC_TERMINAL_ID is set). Not for plans in plan mode: ExitPlanMode already opens the review.
+description: Ask the user to review and annotate a document in the Herdr app (a draft, spec, design note, long answer or any markdown/text file) and get their feedback back, optionally with ```choice blocks they answer by clicking. Use when the user asks you to "send it for review", "let me annotate it", or when you want structured feedback on a written artifact before continuing. Only works inside a Herdr app terminal (HC_TERMINAL_ID is set). Not for plans in plan mode: ExitPlanMode already opens the review.
 ---
 
 # Request a review in Herdr
@@ -31,3 +31,27 @@ Exit codes: 0 feedback or `LGTM` on stdout · 2 the user dismissed the review (a
 3 not inside the Herdr app (ask for feedback in chat instead).
 
 Address every piece of feedback. Run it again after revising if the user wants another round.
+
+## Decisions inside the document
+
+When the document (or a plan) has open questions with concrete options, put each one in a `choice` fence instead of
+asking in prose. The user picks with a click, and the pick comes back in the feedback as `Decision: "…" / Picked: …`:
+
+````md
+```choice
+Which storage backend?
+- Postgres: durable, needs a server
+- SQLite: zero setup
+```
+````
+
+Use `choice multi` when several options can be picked. Option lines are `- label: description`.
+
+## Quick questions without a document
+
+For a quick decision on its own, use the AskUserQuestion tool: inside Herdr it opens there with the options to click.
+Scripts and other agents can use the CLI, which waits and prints the answers as JSON:
+
+```sh
+node "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/review/bin/ask.mjs" "Which database?" -o Postgres -o "SQLite:zero setup"
+```

@@ -1,18 +1,36 @@
 {
-  "description": "Herdr review: plans on ExitPlanMode's permission request, and the last reply on Stop (inside herdr-app terminals only).",
+  "description": "Herdr review: plans on ExitPlanMode's permission request, questions on AskUserQuestion's, and the last reply on Stop (inside herdr-app terminals only).",
   "hooks": {
     "PermissionRequest": [
       {
         "matcher": "ExitPlanMode",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.mjs\"", "timeout": 345600 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.mjs\"",
+            "timeout": 345600
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-ask.mjs\"",
+            "timeout": 345600
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-stop.mjs\"", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-stop.mjs\"",
+            "timeout": 10
+          }
         ]
       }
     ]

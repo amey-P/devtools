@@ -1,5 +1,6 @@
 // Annotations -> the markdown the agent receives.
-// An annotation: { id, block: index | null (general, or stale), type: "comment" | "delete" | "replace" | "general", quote, text, stale? }
+// An annotation: { id, block: index | null (general, or stale), type: "comment" | "delete" | "replace" | "general" | "choice", quote, text, stale? }
+// A choice (a pick in a ```choice block, see blocks.js) also has {question, picked: [labels]}; its text is the picks joined.
 import { plain } from "./blocks.js";
 
 const clip = (s, n = 70) => {
@@ -12,7 +13,10 @@ const fenced = (s) => {
   return `${ticks}\n${s}\n${ticks}`;
 };
 
-/** Orders annotations as they appear in the plan, general ones last. */
+/**
+ * Orders annotations as they appear in the plan, general ones last.
+ * @param {import("./types").Annotation[]} anns
+ */
 export function ordered(anns) {
   return [...anns].sort((a, b) => (a.block ?? 1e9) - (b.block ?? 1e9) || a.created - b.created);
 }
@@ -20,13 +24,17 @@ export function ordered(anns) {
 /** The wording, as in config.defaults.json `prompts.feedback` (the review passes the person's settings). */
 export const LABELS = {
   intro: "I've reviewed {subject} and have {count} of feedback:",
-  sections: { remove: "Remove this", change: "Change this", on: "Feedback on: \"{quote}\"", general: "General feedback", generalOnly: "Feedback" },
+  sections: { remove: "Remove this", change: "Change this", on: "Feedback on: \"{quote}\"", decision: "Decision: \"{quote}\"", general: "General feedback", generalOnly: "Feedback" },
 };
 const fill = (v, vars) => (Array.isArray(v) ? v.join("\n") : String(v)).replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
 
 /**
  * `subject`: what was reviewed, for the intro ("this plan", "`docs/spec.md`", "your last reply").
  * `intro`: a string, or (count) => string, replacing the intro. `labels`: {intro, sections}, see LABELS.
+ */
+/**
+ * @param {import("./types").Annotation[]} anns
+ * @param {import("./types").MarkdownOpts} [opts]
  */
 export function toMarkdown(anns, { heading = "Plan Feedback", intro, subject = "this plan", labels = LABELS } = {}) {
   const sec = { ...LABELS.sections, ...labels?.sections };
@@ -39,7 +47,10 @@ export function toMarkdown(anns, { heading = "Plan Feedback", intro, subject = "
   out.push(typeof intro === "function" ? intro(list.length) : fill(intro ?? labels?.intro ?? LABELS.intro, { subject, count: pieces }), "");
   specific.forEach((a, n) => {
     const q = a.quote ?? "";
-    if (a.type === "delete") {
+    if (a.type === "choice") {
+      out.push(`## ${n + 1}. ${fill(sec.decision ?? LABELS.sections.decision, { quote: clip(a.question ?? plain(q), 90) })}`, "",
+        `**Picked:** ${(a.picked ?? []).join(", ") || a.text.trim()}`, "");
+    } else if (a.type === "delete") {
       out.push(`## ${n + 1}. ${fill(sec.remove, {})}`, "", fenced(q), "");
       if (a.text.trim()) out.push(a.text.trim(), "");
     } else if (a.type === "replace") {

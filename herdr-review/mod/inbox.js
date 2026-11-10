@@ -1,7 +1,7 @@
 // The review inbox: every review in the spool (data/review/<id>/, see bin/bridge.mjs), what needs you first.
 //
 // Opened as a floating window by the review-inbox mod (ctrl-shift-i), which gives the review mod props {inbox: true}.
-// Needs you: plans and asks an agent is waiting on (pending), and send-mode reviews with unsent notes (draft) or not
+// Needs you: plans, asks and choices (questions) an agent is waiting on (pending), and send-mode reviews with unsent notes (draft) or not
 // yet answered (open). Resolved: approved, changes requested, sent, dismissed, replaced (the last 7 days, as the
 // bridge's gc keeps them). Versions collapse into their newest: like the bridge, a new request replaces the one
 // the same agent made of the same kind.
@@ -17,13 +17,14 @@ import {
 import { SETTINGS_WINDOW } from "./settings.js";
 
 const WEEK = 7 * 86400e3;
-const FILTERS = [["all", "All"], ["plan", "Plans"], ["ask", "Asks"]];
+const FILTERS = [["all", "All"], ["plan", "Plans"], ["ask", "Asks"], ["choice", "Decisions"]];
 const STATE = {
   pending: { label: "Waiting for you", color: (t) => t.blocked, pulse: true },
   draft: { label: "Unsent notes", color: (t) => t.accent },
   open: { label: "Feedback wanted", color: (t) => t.accent },
   orphaned: { label: "Agent gone", color: (t) => t.dim },
   approved: { label: "Approved", color: (t) => green(t) },
+  answered: { label: "Answered", color: (t) => green(t) },
   changes: { label: "Changes requested", color: (t) => t.accent },
   sent: { label: "Sent", color: (t) => green(t) },
   dismissed: { label: "Dismissed", color: (t) => t.dim },
@@ -176,7 +177,7 @@ export class Inbox {
         .when(this.loaded && !list.length, (el) => el.child(v_flex().p(30).gap(10).items_center().text_color(t.dim)
           .child(div().mt(20).w(40).h(40).rounded_full().bg(t.raised).flex().items_center().justify_center().text_color(t.muted).child(icon("check", 18)))
           .child(div().text_size(13).font_semibold().text_color(t.muted).child("Nothing here"))
-          .child(div().text_size(12.5).text_center().whitespace_normal().child("Plans and documents agents send for review show up here. Close a review with ✕ or Esc to come back to it later."))))
+          .child(div().text_size(12.5).text_center().whitespace_normal().child("Plans, documents and questions agents send you show up here. Close a review with ✕ or Esc to come back to it later."))))
         .when(needs.length > 0, (el) => el.child(section("NEEDS YOU", needs.length, t.accent)).children(rows(needs)))
         .when(done.length > 0, (el) => el.child(section("RESOLVED · LAST 7 DAYS", done.length, t.dim)).children(rows(done)))
         .child(div().h(12)));
@@ -226,7 +227,7 @@ export class Inbox {
     const ic = p?.icon
       ? (p.tint ? svg(p.icon).size(16).flex_none().text_color(p.color ?? t.foreground) : image(p.icon).w(16).h(16).flex_none())
       : div().w(16).h(16).rounded(4).bg(tint(t.accent, "55")).flex_none();
-    const kind = req.kind === "plan" ? "PLAN" : req.mode === "send" ? "DOC" : "ASK";
+    const kind = req.kind === "plan" ? "PLAN" : req.kind === "choice" ? "DECISION" : req.mode === "send" ? "DOC" : "ASK";
     const deferred = r.seen?.deferred_at && r.needsYou;
     const fresh = r.needsYou && !r.seen?.opened_at;
     const time = r.needsYou ? `${r.state === "pending" ? "waiting " : ""}${ago(req.created)}` : ago(r.at);
