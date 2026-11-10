@@ -7,16 +7,22 @@
 // Text values may be a string or an array of lines; text() joins them and fills {placeholders}.
 // Legacy: the old flat keys (place, width, height, focus, arrive) are read as window.*.
 
+/** @import { RawTree, Rule, Text } from "./types.js" */
+
 export const PLACES = ["float", "right", "down", "tab"];
 export const ARRIVALS = ["open", "inbox"];
 export const SIDEBARS = ["auto", "open", "closed"];
 export const LEGACY = { place: "window.place", width: "window.width", height: "window.height", focus: "window.focus", arrive: "window.arrive" };
 export const SCHEMA_REF = "../../mods/review/config.schema.json";
 
+/** @param {number} n @returns {boolean} */
 const size = (n) => n > 0 && (n <= 1 || n >= 200);
+/** @param {number} lo @param {number} hi @returns {(n: number) => boolean} */
 const between = (lo, hi) => (n) => n >= lo && n <= hi;
+/** @param {string[]} list @returns {(v: string) => boolean} */
 const oneOf = (list) => (v) => list.includes(v);
-/** Extra rules beyond "same type as the default", with what to say when one fails. */
+/** Extra rules beyond "same type as the default", with what to say when one fails.
+ *  @type {Record<string, Rule>} */
 export const RULES = {
   "window.place": [oneOf(PLACES), `one of ${PLACES.join(", ")}`],
   "window.arrive": [oneOf(ARRIVALS), `one of ${ARRIVALS.join(", ")}`],
@@ -28,15 +34,22 @@ export const RULES = {
   "ui.sidebar": [oneOf(SIDEBARS), `one of ${SIDEBARS.join(", ")}`],
 };
 
+/** @param {unknown} v @returns {boolean} */
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+/** @param {unknown} v @returns {boolean} */
 const isText = (v) => typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x === "string"));
+/** @param {unknown} a @param {unknown} b @returns {boolean} */
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/** Reads the value at dotted `path` (undefined when any step isn't an object).
+ *  @param {RawTree} obj @param {string} path @returns {any} */
 export function get(obj, path) {
   let o = obj;
   for (const k of path.split(".")) { if (!isObj(o)) return undefined; o = o[k]; }
   return o;
 }
+/** Writes `value` at dotted `path`, creating intermediate objects; returns `obj`.
+ *  @param {RawTree} obj @param {string} path @param {any} value @returns {RawTree} */
 export function set(obj, path, value) {
   const ks = path.split(".");
   let o = obj;
@@ -44,9 +57,11 @@ export function set(obj, path, value) {
   o[ks[ks.length - 1]] = value;
   return obj;
 }
-/** Removes `path`, and any objects it leaves empty. */
+/** Removes `path`, and any objects it leaves empty.
+ *  @param {RawTree} obj @param {string} path @returns {RawTree} */
 export function unset(obj, path) {
   const ks = path.split(".");
+  /** @param {any} o @param {number} i */
   const walk = (o, i) => {
     if (!isObj(o)) return;
     if (i === ks.length - 1) { delete o[ks[i]]; return; }
@@ -57,8 +72,10 @@ export function unset(obj, path) {
   return obj;
 }
 
-/** Every setting's dotted path, in the defaults' order. */
+/** Every setting's dotted path, in the defaults' order.
+ *  @param {RawTree} defaults @param {string} [prefix] @returns {string[]} */
 export function leaves(defaults, prefix = "") {
+  /** @type {string[]} */
   const out = [];
   for (const [k, v] of Object.entries(defaults)) {
     if (k.startsWith("$")) continue;
@@ -68,7 +85,8 @@ export function leaves(defaults, prefix = "") {
   return out;
 }
 
-/** Why `value` can't be the setting at `path` (null when it can). */
+/** Why `value` can't be the setting at `path` (null when it can).
+ *  @param {RawTree} defaults @param {string} path @param {any} value @returns {string | null} */
 export function problem(defaults, path, value) {
   const def = get(defaults, path);
   if (def === undefined || isObj(def)) return `unknown setting "${path}"`;
@@ -80,9 +98,11 @@ export function problem(defaults, path, value) {
   return null;
 }
 
-/** Parses a value typed as text (the CLI) into the setting's type; throws with what's allowed. */
+/** Parses a value typed as text (the CLI) into the setting's type; throws with what's allowed.
+ *  @param {RawTree} defaults @param {string} path @param {string} input @returns {string | number | boolean} */
 export function parse(defaults, path, input) {
   const def = get(defaults, path);
+  /** @type {string | number | boolean} */
   let v = input;
   if (typeof def === "number") v = Number(input);
   else if (typeof def === "boolean") {
@@ -94,7 +114,8 @@ export function parse(defaults, path, input) {
   return v;
 }
 
-/** The old flat keys, moved into `window` (a nested value wins). Returns a copy. */
+/** The old flat keys, moved into `window` (a nested value wins). Returns a copy.
+ *  @param {any} raw @returns {RawTree} */
 export function migrate(raw) {
   const out = isObj(raw) ? JSON.parse(JSON.stringify(raw)) : {};
   for (const [flat, path] of Object.entries(LEGACY)) {
@@ -105,10 +126,13 @@ export function migrate(raw) {
   return out;
 }
 
-/** The settings in effect: the defaults, with each valid value from `raw` (the person's config.json) on top. */
+/** The settings in effect: the defaults, with each valid value from `raw` (the person's config.json) on top.
+ *  @param {RawTree} defaults @param {any} raw @returns {RawTree} */
 export function merge(defaults, raw) {
   const user = migrate(raw);
+  /** @param {RawTree} def @param {string} prefix */
   const walk = (def, prefix) => {
+    /** @type {RawTree} */
     const out = {};
     for (const [k, d] of Object.entries(def)) {
       if (k.startsWith("$")) continue;
@@ -122,9 +146,11 @@ export function merge(defaults, raw) {
   return walk(defaults, "");
 }
 
-/** Where each setting comes from: "config" when config.json sets it (validly), else "default". */
+/** Where each setting comes from: "config" when config.json sets it (validly), else "default".
+ *  @param {RawTree} defaults @param {any} raw @returns {Record<string, "config" | "default">} */
 export function sources(defaults, raw) {
   const user = migrate(raw);
+  /** @type {Record<string, "config" | "default">} */
   const out = {};
   for (const p of leaves(defaults)) {
     const v = get(user, p);
@@ -134,7 +160,8 @@ export function sources(defaults, raw) {
 }
 
 /** What config.json should hold for settings `cfg`: only what differs from the defaults, plus `$schema`.
- *  `raw`: the current file; keys this version doesn't know are kept. */
+ *  `raw`: the current file; keys this version doesn't know are kept.
+ *  @param {RawTree} defaults @param {RawTree} cfg @param {any} [raw] @returns {RawTree} */
 export function toFile(defaults, cfg, raw = {}) {
   const known = new Set(leaves(defaults));
   const out = migrate(raw);
@@ -146,7 +173,8 @@ export function toFile(defaults, cfg, raw = {}) {
   return { $schema: SCHEMA_REF, ...Object.fromEntries(Object.entries(out).filter(([k]) => k !== "$schema")) };
 }
 
-/** A text setting as one string, with {placeholders} filled from `vars` (unknown ones are left as they are). */
+/** A text setting as one string, with {placeholders} filled from `vars` (unknown ones are left as they are).
+ *  @param {Text} [value] @param {Record<string, string>} [vars] @returns {string} */
 export function text(value, vars = {}) {
   const s = Array.isArray(value) ? value.join("\n") : String(value ?? "");
   return s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
