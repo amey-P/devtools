@@ -452,6 +452,13 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- detail
 
+  /** One plan-limit window inside the service's detail: label + percent left + reset time, over a bar.
+   *  @param {Row} r
+   *  @param {LimitWindow} w
+   *  @param {number} i
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   windowLine(r, w, i, t) {
     const resets = fmtIn(w.resets_at);
     return v_flex().gap(4)
@@ -462,6 +469,13 @@ export default class AgentUsage extends View {
       .child(h_flex().child(this.bar(`win-${r.key}-${i}`, w.pct, t, 5)));
   }
 
+  /** Tokens/cost headline: big token count with the unit label, "~" when estimated.
+   *  @param {string} label
+   *  @param {Totals | undefined} b
+   *  @param {boolean | undefined} estimated
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   stat(label, b, estimated, t) {
     return v_flex().flex_1().min_w(0).gap(1)
       .child(div().text_size(10.5).text_color(t.dim).child(label))
@@ -470,6 +484,11 @@ export default class AgentUsage extends View {
         .child(div().text_size(11).text_color(t.muted).child(`${estimated ? "~" : ""}${fmtCost(b?.cost ?? 0)}`)));
   }
 
+  /** The 7-day token sparkline (the scan's daily history).
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   spark(r, t) {
     const days = r.d?.daily ?? [];
     const max = Math.max(1, ...days.map((d) => d.tokens));
@@ -483,6 +502,12 @@ export default class AgentUsage extends View {
       }));
   }
 
+  /** A one-line hint when the limits aren't current (expired session, signed out, API error);
+   *  null when no explanation is needed.
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element | null}
+   */
   limitNote(r, t) {
     const s = r.d?.limits?.state;
     const text = s === "stale" ? `${r.label}: session expired — reconnect to refresh limits`
@@ -494,6 +519,7 @@ export default class AgentUsage extends View {
 
   // Show/hide this service in the strip (persisted; see toggleHidden). Drawn on
   // in the card, since that's where you turn a service off.
+  /** @param {Row} r @param {Theme} t @returns {import("gpui-kit").Element} */
   hideSwitch(r, t) {
     return div().id(`hide-${r.key}`).relative().w(30).h(17).rounded(9).cursor_pointer().flex_none()
       .bg(alpha(r.brand, 0.4)).border_1().border_color(alpha(r.brand, 0.6))
@@ -503,6 +529,12 @@ export default class AgentUsage extends View {
       .child(div().absolute().top(2).left(15).w(11).h(11).rounded(6).bg(r.brand ?? t.muted));
   }
 
+  /** One service's whole detail block in the card: badge, plan chip, live agents, window bars,
+   *  today/week stats and the 7-day sparkline.
+   *  @param {Row} r
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   section(r, t) {
     const plan = r.d?.limits?.plan;
     const note = this.limitNote(r, t);
@@ -524,6 +556,13 @@ export default class AgentUsage extends View {
       .when(!r.api && (r.d?.daily ?? []).length > 0, (el) => el.child(this.spark(r, t)));
   }
 
+  /** The card's scrollable body: every service's detail, a status/error line and the ⚙/refresh/
+   *  show-hidden buttons. `list` is rows() output, `idPrefix` keeps ids unique between copies.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @param {string} idPrefix
+   *  @returns {import("gpui-kit").Element}
+   */
   detail(list, t, idPrefix) {
     return v_flex().gap(12)
       .children(list.flatMap((r, i) => {
@@ -559,6 +598,12 @@ export default class AgentUsage extends View {
           .child(div().text_size(13).child("↻"))));
   }
 
+  /** The hover card wrap: bg/border/shadow around {@link AgentUsage.detail}.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @param {string} id
+   *  @returns {import("gpui-kit").Element}
+   */
   card(list, t, id) {
     return v_flex().w(260).p(12).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
       .child(this.detail(list, t, id));
@@ -566,13 +611,23 @@ export default class AgentUsage extends View {
 
   // ---------------------------------------------------------------- views
 
+  /** Grows/shrinks the strip's layout block to `px` (no-ops on repeats).
+   *  @param {number} px
+   */
   resizeTo(px) {
     px = Math.round(px);
     if (px === this.lastPx) return;
+    /** @type {number | null} */
     this.lastPx = px;
     run("layout.resize", { id: BLOCK, px });
   }
 
+  /** Sidebar-wide layout: the strip rows, plus the detail inline when pinned (layout.resize), else
+   *  a hover card on hover.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   wide(list, t) {
     const compactH = PAD * 2 + Math.max(1, list.length) * ROW;
     const open = this.pinned;
@@ -605,6 +660,11 @@ export default class AgentUsage extends View {
           .content(this.card(list, t, "card")));
   }
 
+  /** Narrow layout: one tile per service with a fill bar and status badge; hovering shows the card.
+   *  @param {Row[]} list
+   *  @param {Theme} t
+   *  @returns {import("gpui-kit").Element}
+   */
   rail(list, t) {
     this.resizeTo(PAD * 2 + Math.max(1, list.length) * (TILE + RAIL_GAP) - RAIL_GAP);
     return v_flex().size_full().py(PAD).gap(RAIL_GAP).items_center().justify_end()
