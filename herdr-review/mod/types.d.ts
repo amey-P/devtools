@@ -178,6 +178,6 @@ export interface Block {
   /** List nesting depth (0 for everything but items). */
   level: number;
   question?: string;
-  options?: { label: string; description: string }[];
+  options?: { label: string; description?: string }[];
   multi?: boolean;
 }
