@@ -13,6 +13,9 @@ import { v_flex, h_flex, HoverCard } from "gpui-base";
 import { spaces, agents, panes, run, openOverlay, theme, window, appHome, readTextFile, setAgentOrder } from "herdr";
 import { iconFor, alpha } from "./glyphs.js";
 
+/** @import { Theme, Overrides } from "./types" */
+/** @import { SpaceInfo, TabInfo, AgentInfo, PaneInfo, Status } from "herdr" */
+
 const ROW = 26;          // tab row height
 const SPACE = 30;        // space row height
 const MAX_DOTS = 6;
@@ -25,16 +28,24 @@ const RAIL_ROW = 26;     // an inactive space's row
 const PILL = 14;         // a tab's dot cluster
 const PILL_GAP = 3;
 const PILL_DOTS = 4;
+/** @type {import("gpui-shell").TransitionPolicy} */
 const EXPAND = { duration: 140, easing: "ease-out" };
+/** @type {import("gpui-shell").TransitionPolicy} */
 const SLIDE = { duration: 160, easing: "ease-out" };
+/** @type {import("gpui-shell").SpringPolicy} */
 const SPRING = { response: 260, damping: 0.75 };
 
+/** @param {import("gpui-kit").MouseButtonEvent} _e @param {import("gpui-kit").Context} cx @returns {void} */
 const stop = (_e, cx) => cx.stop_propagation();
 
 export default class SpaceTree extends View {
+  /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx @returns {void} */
   init(_props, cx) {
+    /** @type {number} */
     this.width = 248;
+    /** @type {Overrides} */
     this.overrides = {};
+    /** @type {Record<string, boolean>} */
     this.open = {};
     try { this.open = JSON.parse(localStorage.getItem("open") ?? "{}") ?? {}; } catch { this.open = {}; }
     cx.spawn(async (cx) => {
@@ -51,20 +62,23 @@ export default class SpaceTree extends View {
     });
   }
 
+  /** @param {string} id @param {import("gpui-kit").Context} cx @returns {void} */
   toggle(id, cx) {
     this.open[id] = !this.open[id];
     try { localStorage.setItem("open", JSON.stringify(this.open)); } catch {}
     cx.notify();
   }
 
+  /** @param {SpaceInfo} s @param {Theme} t @param {number} size @returns {import("gpui-kit").Element} */
   icon(s, t, size) {
     const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = color.startsWith("#") ? color : (t[color] ?? t.accent);
+    const ink = color.startsWith("#") ? /** @type {import("gpui-kit").Color} */ (color) : (t[color] ?? t.accent);
     return h_flex().flex_none().size(size).rounded(Math.round(size * 0.3)).justify_center().items_center()
       .text_color(ink).bg(alpha(ink, s.active ? 0.24 : 0.12))
       .child(svg(`mods/space-tree/icons/${glyph}.svg`).size(Math.round(size * 0.6)));
   }
 
+  /** @param {AgentInfo} a @param {Theme} t @param {number} [size] @param {string} [key] @returns {import("gpui-kit").Element} */
   dot(a, t, size = 7, key = "dot") {
     const color = t[a.status] ?? t.unknown;
     const idle = a.status === "idle";
@@ -83,12 +97,14 @@ export default class SpaceTree extends View {
   }
 
   // A folded space's rollup dot.
+  /** @param {Status} status @param {Theme} t @param {number} [size] @returns {import("gpui-kit").Element} */
   statusDot(status, t, size = 7) {
     return div().flex_none().size(size).rounded(Math.ceil(size / 2)).bg(t[status] ?? t.unknown)
       .when(status === "working", (d) => d.loop("opacity", { from: 0.35, to: 1, period: 1400 }))
       .when(status === "blocked", (d) => d.loop("opacity", { from: 0.3, to: 1, period: 700 }));
   }
 
+  /** @param {import("gpui-kit").Element} el @param {SpaceInfo} s @returns {import("gpui-kit").Element} */
   spaceMouse(el, s) {
     return el
       .on_mouse_down("left", (e, cx) => {
@@ -102,6 +118,7 @@ export default class SpaceTree extends View {
       });
   }
 
+  /** @param {import("gpui-kit").Element} el @param {SpaceInfo} s @param {TabInfo} c @returns {import("gpui-kit").Element} */
   tabMouse(el, s, c) {
     return el
       .on_mouse_down("left", (e, cx) => {
@@ -115,6 +132,7 @@ export default class SpaceTree extends View {
       });
   }
 
+  /** @param {SpaceInfo} s @param {Theme} t @param {boolean} expanded @param {number} size @returns {import("gpui-kit").Element} */
   chevron(s, t, expanded, size) {
     return h_flex().id(`chev-${s.id}`).flex_none().justify_center().items_center().text_color(t.dim)
       .when(!s.active, (el) => el.hover((st) => st.text_color(t.foreground)))
@@ -124,6 +142,7 @@ export default class SpaceTree extends View {
   }
 
   // A space's tabs: folds open/closed, with the active tab's bar sliding between rows.
+  /** @param {SpaceInfo} s @param {Theme} t @param {number} rowH @param {number} barLeft @param {import("gpui-kit").Element[]} rows @returns {import("gpui-kit").Element} */
   tabsBody(s, t, rowH, barLeft, rows) {
     const expanded = s.active || Boolean(this.open[s.id]);
     const height = expanded ? rows.length * rowH + 4 : 0;
@@ -145,6 +164,7 @@ export default class SpaceTree extends View {
       .children(rows);
   }
 
+  /** @param {TabInfo} c @param {PaneInfo[]} allPanes @returns {string} */
   tabLabel(c, allPanes) {
     if (c.named) return c.name;
     const inTab = allPanes.filter((p) => p.tab === c.id);
@@ -152,6 +172,7 @@ export default class SpaceTree extends View {
     return program?.name ?? `Tab ${c.index}`;
   }
 
+  /** @param {SpaceInfo} s @param {TabInfo} c @param {AgentInfo[]} list @param {Theme} t @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   tabRow(s, c, list, t, allPanes) {
     const selected = c.active && s.active;
     const shown = list.slice(0, MAX_DOTS);
