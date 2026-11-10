@@ -6,6 +6,11 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } fr
 import { spaces, panes, focused, props, exec, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 
+/** @import { Commit, Detail, NumStat, Ref, Status, Theme } from "./types" */
+/** @import { AsyncContext, Color, Context, Element } from "gpui-kit" */
+/** @import { Props } from "gpui-shell" */
+
+/** @type {(name: string) => string} */
 const ICON = (name) => `mods/git/${name}.svg`;
 // Reads write nothing under .git (no index refresh, lock or fsmonitor
 // cookie), so the folder watch never sees our own reads.
@@ -13,11 +18,25 @@ const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.a
 const LIMIT = 400;
 const US = "\x1f", RS = "\x1e";
 
-const alpha = (c, a) => (typeof c === "string" && c.startsWith("#") ? c.slice(0, 7) + a : c);
+/**
+ * A theme color with a new hex-alpha suffix: (#rrggbb, "1f") → #rrggbb1f.
+ * @param {Color} c
+ * @param {string} a
+ * @returns {Color}
+ */
+const alpha = (c, a) => (typeof c === "string" && c.startsWith("#") ? /** @type {Color} */ (c.slice(0, 7) + a) : c);
+/**
+ * The lane colors for a theme, in graph order.
+ * @param {Theme} t
+ * @returns {Color[]}
+ */
 const palette = (t) => [t.accent, t.ansi5, t.ansi6, t.ansi2, t.ansi3, t.ansi4, t.ansi1, t.ansi13, t.ansi14, t.ansi10];
+/** @type {(s: string) => number} */
 const hashOf = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h); };
+/** @param {string} name */
 const initials = (name) => (name.trim().split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("") || "?").toUpperCase();
 
+/** @param {number} sec @returns {string} */
 function ago(sec) {
   const d = Date.now() / 1000 - sec;
   if (d < 60) return "now";
@@ -28,6 +47,10 @@ function ago(sec) {
   return `${Math.floor(d / (86400 * 365))}y`;
 }
 
+/**
+ * The folder this copy of the mod watches and the machine it runs commands on.
+ * @returns {{ cwd: string | null, on: string | null }}
+ */
 function location() {
   const p = props() ?? {};
   if (p.folder) return { cwd: p.folder, on: p.on ?? null };
@@ -37,9 +60,12 @@ function location() {
   const term = all.find((x) => x.tab === tab && x.terminal && x.cwd);
   return { cwd: term?.cwd || space?.folder || null, on: space?.machine ?? null };
 }
+/** @type {() => string} */
 const key = () => JSON.stringify(location());
 
+/** @param {string} text @returns {Status} */
 function parseStatus(text) {
+  /** @type {Status} */
   const out = { branch: null, oid: null, upstream: null, ahead: 0, behind: 0, staged: [], modified: [], untracked: [], conflicts: [] };
   const parts = text.split("\0");
   for (let i = 0; i < parts.length; i++) {
@@ -65,7 +91,9 @@ function parseStatus(text) {
   return out;
 }
 
+/** @param {string} text @returns {Record<string, NumStat>} */
 function parseNumstat(text) {
+  /** @type {Record<string, NumStat>} */
   const stats = {};
   for (const entry of text.split("\0")) {
     const [a, d, ...rest] = entry.split("\t");
@@ -75,7 +103,13 @@ function parseNumstat(text) {
   return stats;
 }
 
+/**
+ * @param {string} text the %D decorate list
+ * @param {string[]} remotes remote names from `git remote`
+ * @returns {Ref[]}
+ */
 function parseRefs(text, remotes) {
+  /** @type {Ref[]} */
   const refs = [];
   for (const raw of text.split(",").map((s) => s.trim()).filter(Boolean)) {
     if (raw.startsWith("HEAD -> ")) refs.push({ kind: "head", name: raw.slice(8) });
@@ -97,11 +131,16 @@ function parseRefs(text, remotes) {
 }
 
 export default class Git extends View {
+  /**
+   * @param {Props | undefined} _props
+   * @param {AsyncContext} cx
+   */
   init(_props, cx) {
     this.handle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
     this.size = { width: 600, height: 800 };
     this.all = true;
+    /** @type {Record<string, boolean>} */
     this.folded = {};
     this.reset();
     this.refresh(cx);
@@ -121,12 +160,17 @@ export default class Git extends View {
   }
 
   reset() {
-    this.root = null; this.on = null; this.error = null; this.status = null; this.commits = []; this.graph = null;
+    this.root = null; this.on = null; this.error = null; this.status = null; this.commits = /** @type {Commit[]} */ ([]); this.graph = null;
     this.stash = 0; this.sel = null; this.detail = null; this.watched = null; this.loaded = false;
   }
 
+  /**
+   * @param {string} root
+   * @param {Context} cx
+   */
   watch(root, cx) {
-    if (this.on || this.watched === root) return;
+    if (this.on || /** @type {string | null} */ (this.watched) === root) return;
+    /** @type {string | null} */
     this.watched = root;
     cx.spawn(async (cx) => {
       try {
@@ -138,10 +182,15 @@ export default class Git extends View {
     });
   }
 
+  /**
+   * @param {Context} cx
+   */
   refresh(cx) {
     if (this.loading) { this.again = true; return; }
     const { cwd, on } = location(), context = key();
-    if (context !== this.context) { this.context = context; this.reset(); }
+    if (context !== this.context) {
+      /** @type {string | undefined} */
+      this.context = context; this.reset(); }
     if (!cwd) { this.error = "No folder"; return; }
     this.loading = true;
     cx.spawn(async (cx) => {
@@ -150,6 +199,7 @@ export default class Git extends View {
         if (key() !== context) return;
         if (top.code !== 0) { this.reset(); this.error = "Not a git repository"; this.cwd = cwd; return; }
         const root = top.stdout.trim();
+        /** @param {string[]} args */
         const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
         const [st, staged, unstaged, remotes, stash] = await Promise.all([
           git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"]),
@@ -165,6 +215,7 @@ export default class Git extends View {
         for (const f of [...status.modified, ...status.conflicts]) Object.assign(f, uStats[f.path] ?? {});
         const remoteNames = remotes.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
 
+        /** @type {Commit[]} */
         let commits = [];
         if (status.oid) {
           const log = await git(["log", this.all ? "--all" : "HEAD", "--topo-order", "-n", String(LIMIT),
@@ -198,6 +249,11 @@ export default class Git extends View {
     });
   }
 
+  /**
+   * @param {string} hash
+   * @param {Context} cx
+   * @param {{ toggle?: boolean, reveal?: boolean }} [opts]
+   */
   select(hash, cx, { toggle = true, reveal = false } = {}) {
     if (toggle && this.sel === hash) { this.sel = null; this.detail = null; cx.notify(); return; }
     this.sel = hash;
@@ -207,6 +263,7 @@ export default class Git extends View {
     this.detail = { hash, loading: true };
     const root = this.root, on = this.on;
     cx.spawn(async (cx) => {
+      /** @param {string[]} args */
       const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
       const [body, files] = await Promise.all([
         git(["show", "-s", "--format=%B%x1f%ad%x1f%cn", "--date=format:%a %d %b %Y · %H:%M", hash]),
@@ -222,6 +279,10 @@ export default class Git extends View {
     cx.notify();
   }
 
+  /**
+   * @param {number} delta
+   * @param {Context} cx
+   */
   move(delta, cx) {
     if (!this.commits.length) return;
     const i = this.commits.findIndex((c) => c.hash === this.sel);
@@ -231,12 +292,24 @@ export default class Git extends View {
 
   // ── Pieces ────────────────────────────────────────────────────────────
 
+  /**
+   * A colored pill with an icon and a text label.
+   * @param {string} icon
+   * @param {string} text
+   * @param {Color} color
+   * @param {Theme} t
+   * @returns {Element}
+   */
   chip(icon, text, color, t) {
     return h_flex().h(20).px(7).gap(4).items_center().flex_none().rounded(10).bg(alpha(color, "1f")).text_color(color).text_size(11).font_medium()
       .when(Boolean(icon), (e) => e.child(svg(ICON(icon)).size(11)))
       .child(text);
   }
 
+  /**
+   * @param {Theme} t
+   * @returns {Element}
+   */
   header(t) {
     const s = this.status, name = this.root ? this.root.split("/").pop() : "Git";
     const branch = s ? (s.branch ?? (s.oid ? `detached @ ${s.oid.slice(0, 7)}` : "no commits yet")) : null;
@@ -259,6 +332,10 @@ export default class Git extends View {
         .child(this.loading ? svg(ICON("spinner")).size(14).spin(900) : svg(ICON("refresh")).size(14)));
   }
 
+  /**
+   * @param {Theme} t
+   * @returns {Element | null}
+   */
   statusCard(t) {
     const s = this.status;
     if (!s) return null;
@@ -326,9 +403,17 @@ export default class Git extends View {
       .child(Scrollbar.vertical("git-status-list").absolute().inset_0()));
   }
 
+  /**
+   * @param {Ref} r
+   * @param {Commit} commit
+   * @param {Theme} t
+   * @param {Color[]} pal
+   * @returns {Element}
+   */
   refPill(r, commit, t, pal) {
     const lane = pal[commit.row.color % pal.length];
     const pill = h_flex().h(18).px(6).gap(4).items_center().flex_none().rounded(5).text_size(10.5).font_medium();
+    /** @param {Element} e */
     const synced = (e) => e.when(Boolean(r.synced), (e) => e.child(div().text_size(9.5).opacity(0.7).child(r.synced.join(" "))));
     if (r.kind === "head") return synced(pill.bg(t.solid).text_color(t.solid_foreground).child(svg(ICON("branch")).size(10)).child(r.name));
     if (r.kind === "detached") return pill.bg(t.solid).text_color(t.solid_foreground).child("HEAD");
@@ -337,12 +422,20 @@ export default class Git extends View {
     return pill.bg(alpha(t.blocked, "1f")).text_color(t.blocked).child(svg(ICON("tag")).size(10)).child(r.name);
   }
 
+  /**
+   * @param {Commit} commit
+   * @param {Theme} t
+   * @param {Color[]} pal
+   * @param {number} width
+   * @returns {Element}
+   */
   graphCell(commit, t, pal, width) {
-    const row = commit.row, L = this.lane, x = (c) => 10 + c * L;
+    const row = commit.row, L = this.lane, x = (/** @type {number} */ c) => 10 + c * L;
     if (!row.paths) row.paths = rowPaths(row, x, PathBuilder);
     const cx0 = x(row.col), color = pal[row.color % pal.length];
     const cell = div().relative().h(ROW).w(width).flex_none().overflow_hidden()
       .children(row.paths.map((p) => window.paint_path(p.path, pal[p.color % pal.length]).absolute().top(0).left(0).size_full()));
+    /** @param {number} size */
     const dot = (size) => div().absolute().left(cx0 - size / 2).top(MID - size / 2).size(size).rounded_full();
     if (commit.wip) return cell.child(dot(12).border(2).border_dashed().border_color(t.muted).bg(t.background));
     if (commit.head) return cell
@@ -353,6 +446,15 @@ export default class Git extends View {
     return cell.child(dot(9).bg(color));
   }
 
+  /**
+   * @param {Commit} commit
+   * @param {Theme} t
+   * @param {Color[]} pal
+   * @param {boolean} narrow
+   * @param {string} mono
+   * @param {number} width
+   * @returns {Element}
+   */
   commitRow(commit, t, pal, narrow, mono, width) {
     const selected = this.sel === commit.hash;
     const r = h_flex().id(`c-${commit.hash}`).w_full().h(ROW).items_center().relative().pr(12)
@@ -380,8 +482,13 @@ export default class Git extends View {
         .child(div().w(58).flex_none().text_right().font_family(mono).text_size(10.5).text_color(t.dim).child(commit.hash.slice(0, 7))));
   }
 
+  /**
+   * @param {Theme} t
+   * @returns {Element}
+   */
   history(t) {
     const pal = palette(t), narrow = this.size.width < 440, mono = settings().font_family ?? "JetBrains Mono";
+    /** @param {string} id @param {string} label @param {boolean} on */
     const seg = (id, label, on) => div().id(id).h(20).px(8).flex().items_center().rounded(5).text_size(11).cursor_pointer()
       .when(on, (e) => e.bg(t.raised).text_color(t.foreground).shadow_sm())
       .when(!on, (e) => e.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
@@ -411,6 +518,10 @@ export default class Git extends View {
         .when(!this.commits.length && this.loaded, (e) => e.child(this.empty(t, "No commits yet", "Make the first commit and the graph starts here."))));
   }
 
+  /**
+   * @param {Theme} t
+   * @returns {Element | null}
+   */
   details(t) {
     const d = this.detail;
     if (!d) return null;
@@ -418,6 +529,7 @@ export default class Git extends View {
     if (!commit) return null;
     const pal = palette(t), mono = settings().font_family ?? "JetBrains Mono";
     const box = v_flex().h(Math.min(260, this.size.height * 0.38)).flex_none().border_t(1).border_color(t.border).bg(t.surface);
+    /** @param {Element} label */
     const bar = (label) => h_flex().h(36).flex_none().px(16).gap(8).items_center().border_b(1).border_color(t.border).child(label)
       .child(div().flex_1())
       .child(div().id("git-close").px(6).h(20).flex().items_center().rounded(5).text_size(10.5).text_color(t.dim).cursor_pointer()
@@ -445,6 +557,12 @@ export default class Git extends View {
         .child(Scrollbar.vertical("git-detail").absolute().inset_0()));
   }
 
+  /**
+   * @param {(NumStat & { path: string })[]} files
+   * @param {Commit} commit
+   * @param {Theme} t
+   * @returns {Element}
+   */
   files(files, commit, t) {
     const max = Math.max(1, ...files.map((f) => f.add + f.del));
     const add = files.reduce((n, f) => n + f.add, 0), del = files.reduce((n, f) => n + f.del, 0);
@@ -456,6 +574,12 @@ export default class Git extends View {
       .children(files.slice(0, 200).map((f) => this.fileRow(f, max, t)));
   }
 
+  /**
+   * @param {string} id
+   * @param {{ path: string, add: number, del: number, binary?: boolean }[]} files
+   * @param {Theme} t
+   * @returns {Element}
+   */
   fileList(id, files, t) {
     const max = Math.max(1, ...files.map((f) => f.add + f.del));
     return div().flex_1().min_h(0).relative()
@@ -463,6 +587,12 @@ export default class Git extends View {
       .child(Scrollbar.vertical(id).absolute().inset_0());
   }
 
+  /**
+   * @param {{ path: string, add: number, del: number, binary?: boolean }} f
+   * @param {number} max
+   * @param {Theme} t
+   * @returns {Element}
+   */
   fileRow(f, max, t) {
     const parts = f.path.split("/"), file = parts.pop();
     const w = 48, a = Math.round((f.add / max) * w), d = Math.round((f.del / max) * w);
@@ -476,6 +606,12 @@ export default class Git extends View {
         .child(div().h_full().w(a).bg(t.ansi2)).child(div().h_full().w(d).bg(t.ansi1)));
   }
 
+  /**
+   * @param {Theme} t
+   * @param {string} title
+   * @param {string} body
+   * @returns {Element}
+   */
   empty(t, title, body) {
     return v_flex().absolute().inset_0().items_center().justify_center().gap(8).p(24)
       .child(div().size(44).rounded(12).flex().items_center().justify_center().bg(t.raised).child(svg(ICON("branch")).size(20).text_color(t.dim)))
@@ -483,6 +619,10 @@ export default class Git extends View {
       .child(div().text_size(12).text_color(t.dim).text_center().child(body));
   }
 
+  /**
+   * @param {Context} cx
+   * @returns {Element}
+   */
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
     const t = theme();
