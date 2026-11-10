@@ -9,6 +9,8 @@
 // With --wait: blocks until the person decides and prints the feedback (or "LGTM") on stdout.
 // Exit: 0 ok · 1 usage / unreadable file · 2 dismissed (or interrupted) · 3 not inside the Herdr app.
 // Closing the window only puts the review off (it stays in the inbox, ctrl-shift-i); --wait keeps waiting.
+/** @import { Place } from "../types.js" */
+
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { openReview } from "./bridge.mjs";
@@ -20,12 +22,15 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--wait" || a === "-w") wait = true;
   else if (a === "--title" || a === "-t") title = args[++i] ?? null;
-  else if (a === "--place" || a === "-p") { place = args[++i] ?? ""; if (!PLACES.includes(place)) usage(1); }
-  else if (a.startsWith("--place=")) { place = a.slice(8); if (!PLACES.includes(place)) usage(1); }
+  // Both place assignments are checked on their own line, so the stored value is provably a place; `place` then
+  // stays Place | null into openReview() (null = "use the settings").
+  else if (a === "--place" || a === "-p") { place = /** @type {Place} */ (args[++i] ?? ""); if (!PLACES.includes(place)) usage(1); }
+  else if (a.startsWith("--place=")) { place = /** @type {Place} */ (a.slice(8)); if (!PLACES.includes(place)) usage(1); }
   else if (a === "-h" || a === "--help") { usage(0); }
   else if (src === null) src = a;
   else usage(1);
 }
+/** @param {number} code */
 function usage(code) {
   process.stderr.write("usage: review.mjs <file | -> [--title T] [--wait] [--place float|right|down|tab]\n");
   process.exit(code);
