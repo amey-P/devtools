@@ -313,6 +313,7 @@ export default class Review extends View {
 
   // ---- data ------------------------------------------------------------------
 
+  /** @returns {import("./types").ReviewKind} */
   get kind() { return this.req?.kind ?? this.launch?.kind ?? "plan"; }
   get mode() { return this.req?.mode ?? (this.launch ? "send" : "decision"); }
   get file() { return this.req?.file ?? this.launch?.file ?? null; }
@@ -1010,10 +1011,14 @@ export default class Review extends View {
     return [deny, h_flex().flex_none().items_center().child(main).child(menu)];
   }
 
+  /** @param {import("./types").Theme} t @param {string} okLabel @returns {import("gpui-kit").Element} */
   renderApproveMenu(t, okLabel) {
     const n = this.anns.length;
     const g = green(t);
     const shown = this.approveMenu && this.appear.is("approve-menu");
+    /** One menu row. `k`: its keystroke, when it has one; `mode`: what approve(cx, mode) gets.
+     *  @param {string} id @param {string} ic @param {import("gpui-kit").Color} color @param {string} title
+     *  @param {string} sub @param {string | null} k @param {"notes" | "discard"} mode */
     const item = (id, ic, color, title, sub, k, mode) => h_flex().id(id).gap(10).px(10).py(8).items_start().rounded(7).cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { this.approveMenu = false; this.approve(cx, mode); })
@@ -1037,6 +1042,8 @@ export default class Review extends View {
   }
 
   /** Who asked for this review (or who feedback goes to), and where that agent is. Click: go to it. */
+  /** @param {import("./types").Theme} t @param {boolean} sendMode @param {import("herdr").AgentInfo[]} tabAgents
+   *  @param {boolean} compact @returns {import("gpui-kit").Element} */
   renderParent(t, sendMode, tabAgents, compact) {
     const par = this.parent;
     if (sendMode && !par.terminal) return div().flex_none().child("No agent in this tab");
@@ -1057,6 +1064,7 @@ export default class Review extends View {
         .tooltip("Send to another agent in this tab").on_click((_e, cx) => this.cycleTarget(cx)).child("▾")));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderDoc(t) {
     const open = this.status === "open";
     const general = this.anns.filter((a) => a.type === "general");
@@ -1065,6 +1073,7 @@ export default class Review extends View {
     const words = this.blocks.reduce((n, b) => n + plain(b.src).split(/\s+/).filter(Boolean).length, 0);
     const steps = this.blocks.filter((b) => b.kind === "item").length;
     const sections = this.blocks.filter((b) => b.kind === "heading").length;
+    /** A small meta chip. @param {string} ic @param {string} text @returns {import("gpui-kit").Element} */
     const meta = (ic, text) => h_flex().gap(5).items_center().flex_none().child(icon(ic, 11)).child(text);
     if (!general.length && !editingGeneral) this.appear.forget("general-card");
     return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar()
@@ -1106,6 +1115,7 @@ export default class Review extends View {
             .children(this.blocks.map((b, i) => this.renderBlock(b, i, t)))))));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderSent(t) {
     const s = this.lastSent;
     const c = green(t);
@@ -1129,11 +1139,13 @@ export default class Review extends View {
       } }));
   }
 
+  /** @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderResult(t) {
     const d = this.sent ?? {};
     const who = this.agentName;
     const plan = this.kind === "plan";
-    const [color, ic, title, body] = d.decision === "answer"
+    /** Every branch pairs a colour with three strings; the destructured names keep those types. */
+    const [color, ic, title, body] = /** @type {[import("gpui-kit").Color, string, string, string]} */ (d.decision === "answer"
       ? [green(t), "check", "Answered", `${who} has your answer${this.choice?.summary() ? `: ${clip(this.choice.summary(), 120)}` : "."}`]
       : d.decision === "approve"
       ? [green(t), "check", d.notes ? "Approved with notes" : plan ? "Plan approved" : "Approved",
@@ -1142,7 +1154,7 @@ export default class Review extends View {
         plan ? `Your feedback was sent. ${who} will revise the plan.` : `Your feedback was sent to ${who}.`]
       : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : this.choice ? "question" : "review request"} replaced this review.`]
       : d.decision === "dismissed" ? [t.dim, "x", "Closed", "Closed without a decision."]
-      : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."];
+      : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."]);
     return fadeIn(h_flex(), this.appear.is("result"), 8, { duration: 280, easing: "ease-out" }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
       .border_1().border_color(tint(color, "66")).shadow_md()
       .child(wash(tint(color, "26"), tint(t.background, "00"), 90))
@@ -1155,7 +1167,9 @@ export default class Review extends View {
         .child(div().text_size(this.sz(12.5)).text_color(t.muted).child(body)));
   }
 
-  /** The options of a ```choice block, as chips to click. */
+  /** The options of a ```choice block, as chips to click. A choice block always carries its question
+   *  and options (blocks.js parseChoice). @param {import("./types").Block & { question: string; options: { label: string; description?: string }[] }} b
+   *  @param {number} i @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderChoiceBlock(b, i, t) {
     const open = this.status === "open";
     const picked = new Set(this.anns.find((a) => a.type === "choice" && a.block === i)?.picked ?? []);
@@ -1169,7 +1183,7 @@ export default class Review extends View {
         const on = picked.has(o.label);
         return h_flex().id(`cb-${i}-${oi}`).gap(6).px(10).py(5).items_center().rounded(8).border_1()
           .border_color(on ? g : t.border).bg(on ? tint(g, "1e") : t.background).text_size(this.sz(12.5))
-          .when(!!o.description, (el) => el.tooltip(o.description))
+          .when(!!o.description, (el) => el.tooltip(/** @type {string} */ (o.description)))
           .when(open, (el) => el.cursor_pointer().hover((s) => s.border_color(tint(g, "aa")))
             .on_click((_e, cx) => { cx.stop_propagation(); this.pickOption(i, o.label, cx); }))
           .when(on, (el) => el.child(div().text_color(g).child(icon("check", 12))))
@@ -1177,6 +1191,8 @@ export default class Review extends View {
       })));
   }
 
+  /** One document block: its text (struck through when deleted / replaced), the hover toolbar, and its notes.
+   *  @param {import("./types").Block} b @param {number} i @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   renderBlock(b, i, t) {
     const notes = this.anns.filter((a) => a.block === i && a.type !== "choice");
     const del = notes.find((a) => a.type === "delete");
@@ -1200,9 +1216,9 @@ export default class Review extends View {
       .children(["comment", "delete", "replace"].map((k) => h_flex().id(`tb-${k}-${i}`).h(22).px(7).gap(5).items_center().rounded(5)
         .text_size(this.sz(11.5)).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
         .hover((s) => s.bg(t.hover).text_color(k === "delete" ? t.blocked : t.foreground))
-        .on_click((_e, cx) => this.startEdit(i, k, cx))
-        .child(icon(KINDS[k].icon, 13))
-        .when(this.width >= 560, (el) => el.child(KINDS[k].label))));
+        .on_click((_e, cx) => this.startEdit(i, /** @type {"comment" | "delete" | "replace"} */ (k), cx))
+        .child(icon(KINDS[/** @type {"comment" | "delete" | "replace"} */ (k)].icon, 13))
+        .when(this.width >= 560, (el) => el.child(KINDS[/** @type {"comment" | "delete" | "replace"} */ (k)].label))));
 
     const framed = b.kind === "table";
     const body = div().id(`bw-${i}`).relative().flex_1().min_w(0).px(10).py(heading ? 6 : 3).rounded(8)
@@ -1214,7 +1230,7 @@ export default class Review extends View {
         .when(b.kind === "quote", (el) => el.pl(10).border_l_2().border_color(tint(t.accent, "88")))
         // Text keeps its own presses (selection, ⌘C) instead of handing the keyboard to the root.
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-        .child(b.kind === "choice" ? this.renderChoiceBlock(b, i, t) : TextView.markdown(`b-${i}`, b.src).selectable(true)))
+        .child(b.kind === "choice" ? this.renderChoiceBlock(/** @type {import("./types").Block & { question: string; options: { label: string; description?: string }[] }} */ (b), i, t) : TextView.markdown(`b-${i}`, b.src).selectable(true)))
       .when(hover && !editingHere, (el) => el.child(toolbar));
 
     // Left gutter: a marker in the annotation's colour, or a faint dot on hover.
@@ -1239,6 +1255,8 @@ export default class Review extends View {
         .when(editingHere, (el) => el.child(div().pl(10).py(6).child(this.renderEditor(t)))));
   }
 
+  /** A small type chip ("COMMENT", "DELETE"…). @param {import("./types").Annotation["type"]} type
+   *  @param {import("./types").Theme} t @returns {import("gpui-kit").Element} */
   pill(type, t) {
     const c = this.color(type, t);
     return h_flex().flex_none().h(18).px(6).gap(4).items_center().rounded(5).bg(tint(c, "22")).text_color(c)
