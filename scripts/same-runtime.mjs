@@ -21,10 +21,34 @@ if (!base) { console.error("usage: node scripts/same-runtime.mjs <base-ref> [pat
 /** @param {string[]} args @returns {string} */
 const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" });
 
-/** Code with comments removed, printed in one canonical format. @param {string} name @param {string} text @returns {string} */
+/**
+ * A JSDoc type cast: parentheses whose own JSDoc holds a type or satisfies tag, there only to carry a type.
+ * Only the parenthesized expression's OWN JSDoc counts, never a tag inherited from an enclosing statement.
+ * @param {import("typescript").Node} n @returns {n is import("typescript").ParenthesizedExpression}
+ */
+function isCast(n) {
+  if (!ts.isParenthesizedExpression(n)) return false;
+  /** @type {import("typescript").JSDoc[] | undefined} */
+  const docs = /** @type {any} */ (n).jsDoc;
+  return !!docs?.some((d) => d.tags?.some((t) => ts.isJSDocTypeTag(t) || ts.isJSDocSatisfiesTag(t)));
+}
+
+/**
+ * Removes cast parentheses. Parents are rebuilt through the node factory, whose parenthesizer puts back any
+ * parentheses that precedence needs: so a "cast" that regroups `a + b * c` into `(a + b) * c` still differs.
+ * @type {import("typescript").TransformerFactory<import("typescript").SourceFile>}
+ */
+const stripCasts = (ctx) => (root) => {
+  /** @param {import("typescript").Node} n @returns {import("typescript").Node} */
+  const visit = (n) => isCast(n) ? visit(n.expression) : ts.visitEachChild(n, visit, ctx);
+  return /** @type {import("typescript").SourceFile} */ (ts.visitNode(root, visit));
+};
+
+/** Code with comments and type casts removed, printed in one canonical format. @param {string} name @param {string} text @returns {string} */
 function normalize(name, text) {
   const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
-  return ts.createPrinter({ removeComments: true }).printFile(sf);
+  const out = ts.transform(sf, [stripCasts]).transformed[0];
+  return ts.createPrinter({ removeComments: true }).printFile(out);
 }
 
 const files = paths.length ? paths
