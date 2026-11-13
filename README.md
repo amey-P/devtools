@@ -4,7 +4,7 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 
 | Project | Installs | Into `$HERDR_APP_HOME` |
 |---|---|---|
-| `herdr-git/` | Git graph and status pane (ctrl-shift-g) | `mods/git` |
+| `herdr-git/` | Git drawer on the minimal layout's sidebar edge (ctrl-shift-g opens it as a window elsewhere; see below) | `mods/git` |
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
@@ -38,6 +38,12 @@ The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a c
 | `HERDR_APP_HOME` | `~/.config/herdr-app` | Herdr's home |
 | `HERDR_DEVTOOLS_REPO` | `https://github.com/amey-P/devtools.git` | Git URL the bootstrap clones from |
 | `HERDR_DEVTOOLS_DIR` | `~/.local/share/herdr-devtools` | Where the bootstrap clones to |
+
+## Git drawer
+
+`herdr-git` is a drawer that floats on the left edge of the work area, next to the sidebar (the minimal layout's `work-body` node has it as a `floating` block with `peek`). While closed, a 40 px strip shows the branch with a clean/dirty/conflict dot, the number of changed files, ahead/behind, a rebase/merge/cherry-pick/revert/bisect in progress (with its step), the worktree count and stashes. Hovering slides out the rest: the working tree, branches (ahead/behind, which worktree has each checked out), worktrees (click to open or switch to their space), stashes, the commit graph and commit details. The history loads the first time it opens.
+
+It follows the focused terminal's repo, falling back to the tab's other terminals and the space's folder. It handles ordinary checkouts, linked worktrees, submodules, a folder inside `.git` and bare repos (including the `.bare` + worktrees layout), on this machine or a space's. Locally it watches the work tree and both git dirs, so commits made in any worktree show up at once. Other layouts open the same view as a window with ctrl-shift-g (`./install.sh install git` rebinds the old split-pane key; anything else bound there is left alone). `node --test herdr-git/test` runs its unit tests.
 
 ## Agent usage widget
 

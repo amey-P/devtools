@@ -1,53 +1,26 @@
 // Git: the repo's commit graph, working-tree status, branches and worktrees, read-only.
+// Floating with `peek` it is a drawer (drawer.js); opened with mod.open it is a window.
 // It follows the focused terminal's folder (falling back to the space's), or
 // `props().folder` when given. Works in ordinary checkouts, linked worktrees,
 // submodules and bare repos, locally or on a space's machine.
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { spaces, panes, focused, props, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
+import { spaces, panes, focused, props, placement, appHome, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 import { discoverFirst } from "./discover.js";
 import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadRefs, loadOperation, loadLog, classifyChange, dirtyCount } from "./load.js";
 import { norm, base, repoName, samePath } from "./paths.js";
+import { ICON, alpha, palette, hashOf, initials, ago } from "./ui.js";
+import { drawer, drawerAvail } from "./drawer.js";
+import { join } from "./paths.js";
 
 /** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult } from "./types" */
 /** @import { AsyncContext, Color, Context, Element } from "gpui-kit" */
 /** @import { Props } from "gpui-shell" */
 
-/** @type {(name: string) => string} */
-const ICON = (name) => `mods/git/${name}.svg`;
 const US = "\x1f";
 /** @type {RefsState} */
 const NO_REFS = { branches: [], worktrees: [], stashes: [], remotes: {}, tag: null };
-
-/**
- * A theme color with a new hex-alpha suffix: (#rrggbb, "1f") → #rrggbb1f.
- * @param {Color} c
- * @param {string} a
- * @returns {Color}
- */
-const alpha = (c, a) => (typeof c === "string" && c.startsWith("#") ? /** @type {Color} */ (c.slice(0, 7) + a) : c);
-/**
- * The lane colors for a theme, in graph order.
- * @param {Theme} t
- * @returns {Color[]}
- */
-const palette = (t) => [t.accent, t.ansi5, t.ansi6, t.ansi2, t.ansi3, t.ansi4, t.ansi1, t.ansi13, t.ansi14, t.ansi10];
-/** @type {(s: string) => number} */
-const hashOf = (s) => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h); };
-/** @param {string} name */
-const initials = (name) => (name.trim().split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("") || "?").toUpperCase();
-
-/** @param {number} sec @returns {string} */
-function ago(sec) {
-  const d = Date.now() / 1000 - sec;
-  if (d < 60) return "now";
-  if (d < 3600) return `${Math.floor(d / 60)}m`;
-  if (d < 86400) return `${Math.floor(d / 3600)}h`;
-  if (d < 86400 * 30) return `${Math.floor(d / 86400)}d`;
-  if (d < 86400 * 365) return `${Math.floor(d / (86400 * 30))}mo`;
-  return `${Math.floor(d / (86400 * 365))}y`;
-}
 
 /**
  * Folders to look for a repo in, best first, and the machine to run git on.
@@ -58,8 +31,7 @@ function ago(sec) {
 function location() {
   const p = props() ?? {};
   if (p.folder) return { candidates: [p.folder], on: p.on ?? null };
-  const all = panes(), f = focused(), me = p.pane ? all.find((x) => x.pane === p.pane) : null;
-  const tab = me?.tab ?? f?.tab;
+  const all = panes(), f = focused(), tab = f?.tab;
   const space = spaces().find((s) => s.tabs.some((t) => t.id === tab)) ?? spaces().find((s) => s.active);
   /** @type {string[]} */
   const list = [];
@@ -70,6 +42,12 @@ function location() {
   if (space?.folder) list.push(space.folder);
   return { candidates: list.filter((c, i) => list.findIndex((d) => samePath(c, d)) === i), on: space?.machine ?? null };
 }
+/**
+ * Where this copy floats. `props().preview` draws the open drawer in an
+ * ordinary pane, for checking its look without hovering.
+ * @returns {ReturnType<typeof placement>}
+ */
+const place = () => placement() ?? (props()?.preview ? { edge: "left", align: "start", vertical: true, hovered: true, dragging: false } : null);
 /** @type {() => string} */
 const key = () => JSON.stringify(location());
 
@@ -92,6 +70,14 @@ export default class Git extends View {
     this.all = true;
     /** @type {Record<string, boolean>} */
     this.folded = {};
+    try { this.folded = JSON.parse(localStorage.getItem("folded") ?? "{}") ?? {}; } catch { /* storage unavailable */ }
+    // The drawer loads history the first time it opens; other views load at once.
+    this.awake = !place();
+    this.avail = drawerAvail(null, undefined);
+    this.statusH = 0;
+    cx.spawn(async () => {
+      try { this.avail = drawerAvail(await readTextFile(join(appHome(), "window.json")), Number(settings().zoom) || 1); } catch { /* keep the default */ }
+    });
     /** @type {"status" | "all" | null} */
     this.pending = null;
     this.reset();
@@ -112,6 +98,22 @@ export default class Git extends View {
       }
     });
   }
+
+  /**
+   * Folds or unfolds a section, remembered per copy.
+   * @param {string} id
+   * @param {boolean} folded
+   */
+  fold(id, folded) {
+    this.folded[id] = folded;
+    try { localStorage.setItem("folded", JSON.stringify(this.folded)); } catch { /* storage unavailable */ }
+  }
+
+  /** The status card's height as last drawn, margin included. */
+  statusCardHeight() { return this.statusH; }
+
+  /** The commit details panel's height. */
+  detailsHeight() { return Math.min(260, this.size.height * 0.38); }
 
   reset() {
     /** @type {string | undefined} */
@@ -245,7 +247,7 @@ export default class Git extends View {
           loadStatus(repo, git), loadRefs(repo, git, gitAt).catch(() => NO_REFS), loadOperation(repo, read), repo.root ? null : loadHead(git),
         ]);
         const oid = status ? status.oid : head?.oid ?? null;
-        const commits = await loadLog(repo, git, { all: this.all, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) });
+        const commits = this.awake ? await loadLog(repo, git, { all: this.all, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) }) : [];
         if (key() !== context) return;
 
         const sameHistory = this.graph && this.commits.length === commits.length && this.commits.every((c, i) => c.hash === commits[i].hash && c.parents.join() === commits[i].parents.join());
@@ -411,6 +413,7 @@ export default class Git extends View {
     const total = groups.reduce((n, g) => n + g.files.length, 0);
     const card = v_flex().mx(12).mb(10).flex_none().rounded(10).bg(t.surface).border_1().border_color(t.border).overflow_hidden();
     if (!total) {
+      this.statusH = 50;
       return card.child(h_flex().h(40).px(12).gap(8).items_center().text_size(12)
         .child(svg(ICON("check")).size(15).text_color(t.ansi2))
         .child(div().text_color(t.foreground).font_medium().child("Working tree clean"))
@@ -438,7 +441,7 @@ export default class Git extends View {
       const open = !this.folded[g.id];
       rows.push(h_flex().id(`grp-${g.id}`).h(26).flex_none().px(10).gap(6).items_center().cursor_pointer().rounded(6)
         .hover((st) => st.bg(t.hover))
-        .on_click((_e, cx) => { this.folded[g.id] = open; cx.notify(); })
+        .on_click((_e, cx) => { this.fold(g.id, open); cx.notify(); })
         .child(svg(ICON(open ? "chevron" : "chevron-right")).size(11).text_color(t.dim))
         .child(div().size(7).rounded_full().bg(g.color))
         .child(div().text_size(11.5).font_medium().text_color(t.foreground).child(g.label))
@@ -461,6 +464,7 @@ export default class Git extends View {
       }
     }
     const max = Math.max(90, this.size.height * (this.detail ? 0.2 : 0.34));
+    this.statusH = 50 + Math.min(height + 8, max) + 12;
     return card.child(summary).child(div().h(Math.min(height + 8, max)).relative().border_t(1).border_color(t.border)
       .child(v_flex().id("git-status-list").absolute().inset_0().overflow_y_scroll().p(4).children(rows))
       .child(Scrollbar.vertical("git-status-list").absolute().inset_0()));
@@ -591,7 +595,7 @@ export default class Git extends View {
     const commit = this.commits.find((c) => c.hash === d.hash);
     if (!commit) return null;
     const pal = palette(t), mono = settings().font_family ?? "JetBrains Mono";
-    const box = v_flex().h(Math.min(260, this.size.height * 0.38)).flex_none().border_t(1).border_color(t.border).bg(t.surface);
+    const box = v_flex().h(this.detailsHeight()).flex_none().border_t(1).border_color(t.border).bg(t.surface);
     /** @param {Element} label */
     const bar = (label) => h_flex().h(36).flex_none().px(16).gap(8).items_center().border_b(1).border_color(t.border).child(label)
       .child(div().flex_1())
@@ -689,6 +693,8 @@ export default class Git extends View {
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
     const t = theme();
+    const where = place();
+    if (where?.hovered && !this.awake) { this.awake = true; this.refresh(cx); }
     const root = v_flex().id("git").size_full().min_h(0).relative().bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.handle)
       .on_size_change((size, cx) => { this.size = size; cx.notify(); })
@@ -702,6 +708,7 @@ export default class Git extends View {
         else return;
         cx.stop_propagation();
       });
+    if (where) return root.size_full().child(drawer(this, t, where));
     if (!this.root) {
       return root.child(this.header(t)).child(div().flex_1().relative().child(
         this.loading || !this.error ? this.empty(t, "Reading repository…", "")
