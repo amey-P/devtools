@@ -10,6 +10,7 @@
 // Usage: node install.mjs <command> [herdr|claude|pi|all] [--link] [--force]
 //   install | sync     install or bring a target up to date (default target: all)
 //   status             what's installed where, and whether it's current
+//   installed <target> exit 0 if that target is installed (for scripts)
 //   uninstall          remove from a target (the review spool in data/review is kept)
 //   version <x.y.z>    set the version in every manifest
 //   bump patch|minor|major
@@ -439,6 +440,10 @@ switch (cmd) {
     }
     process.exit(ok ? 0 : 2);
   }
+  case "installed":
+    // Exit 0 when the target is installed (current or not): how ../install.sh tells opted-in agents apart.
+    if (!targets || targets.length !== 1) die("installed herdr|claude|pi");
+    process.exit(impl[targets[0]].status().installed ? 0 : 1);
   case "uninstall":
     if (!targets) die(`unknown target ${arg}`);
     for (const t of [...targets].reverse()) { log(`${t}:`); impl[t].uninstall(); }

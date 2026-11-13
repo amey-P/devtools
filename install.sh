@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # herdr-app devtools: install every Herdr mod, layout and integration in this repo.
 #
-#   ./install.sh [command] [target]
+#   ./install.sh [command] [target] [agent]
 #     install    copy into Herdr's home (default command)
 #     status     what's installed, and whether it matches the repo
 #     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 #     uninstall  remove what this repo installed (layouts are left alone)
-#   targets: all (default) | git | minimal | sidebar | usage | review
+#   targets: all (default) | git | minimal | sidebar | usage | review | agents
+#   agents is opt-in and never part of `all`: it adds the coding-agent integrations
+#   (the herdr-review Claude Code plugin and pi extension). `install agents [claude|pi]`
+#   opts in; after that, `install` keeps them current. `uninstall agents [claude|pi]` opts out.
 #
 # Without a clone, bootstrap with:
 #   curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash                    # clone + install all
@@ -21,9 +24,10 @@
 set -euo pipefail
 
 DEFAULT_REPO_URL="https://github.com/amey-P/devtools.git"
-TARGETS="git minimal sidebar usage review"
+TARGETS="git minimal sidebar usage review"   # what `all` means
+AGENTS="claude pi"                           # `agents` (opt-in) integrations
 
-usage() { sed -n '2,20p' "$1" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^# Everything sits/p' "$1" | sed '$d' | sed '$d' | sed 's/^# \{0,1\}//'; }
 
 # ---------------------------------------------------------------- bootstrap
 
@@ -46,6 +50,19 @@ bootstrap() {
 # ---------------------------------------------------------------- targets
 
 review_mjs() { node "$REPO_ROOT/herdr-review/install.mjs" "$@"; }
+# agent_on <claude|pi>: opted in = installed. No state file to drift.
+agent_on() { has node && review_mjs installed "$1" >/dev/null 2>&1; }
+
+# install_agents <list>: the review mod first (every integration loads its bridge), then each agent.
+install_agents() {
+  has node || { warn "  node not found; agents need Node.js 18+"; return 0; }
+  review_mjs installed herdr >/dev/null 2>&1 || review_mjs install herdr | sed '1d'
+  local a
+  for a in $1; do
+    if has "$a"; then review_mjs install "$a" | sed '1d'
+    else warn "  $a not on PATH; skipped (install it, then: ./install.sh install agents $a)"; fi
+  done
+}
 
 # keys.json bindings install.sh manages (scripts/keys.mjs does the JSON surgery idempotently and
 # backs keys.json up before its first change).
@@ -79,8 +96,14 @@ install_target() {
       ensure_binding "$USAGE_BINDING" "$USAGE_CMD" ;;
     review)
       say "review:"
-      if has node; then review_mjs install all
+      if has node; then
+        review_mjs install herdr | sed '1d'
+        # Agents someone opted into stay current; nobody gets one by default.
+        local a; for a in $AGENTS; do agent_on "$a" && review_mjs install "$a" | sed '1d'; done
       else warn "  node not found; skipped herdr-review (install Node.js 18+ and re-run: ./install.sh install review)"; fi ;;
+    agents)
+      say "agents:"
+      install_agents "${AGENT_PICK:-$AGENTS}" ;;
   esac
 }
 
@@ -121,8 +144,18 @@ status_target() {
         show "layouts/$f" "$(file_state "$REPO_ROOT/herdr-minimal/layouts/$f" "$HERDR_HOME/layouts/$f")" || r=1
       done ;;
     review)
-      if has node; then review_mjs status | sed '1d' || r=1
-      else show review "node not found" || r=1; fi ;;
+      if has node; then review_mjs status herdr | sed '1d' || r=1
+      else show review "node not found" || r=1; fi
+      # Opted-in agents count toward status; the rest are just noted.
+      if [ -z "${STATUS_AGENTS:-}" ]; then
+        local a; for a in $AGENTS; do
+          if agent_on "$a"; then review_mjs status "$a" | sed '1d' || r=1
+          else dim "  · $a     not opted in (./install.sh install agents $a)"; fi
+        done
+      fi ;;
+    agents)
+      if has node; then local a; for a in ${AGENT_PICK:-$AGENTS}; do review_mjs status "$a" | sed '1d' || r=1; done
+      else show agents "node not found" || r=1; fi ;;
   esac
   return $r
 }
@@ -131,7 +164,16 @@ uninstall_target() {
   local name
   case "$1" in
     git) name=git ;; minimal) name=space-icons ;; sidebar) name=space-tree ;; usage) name="agent-usage usage-settings" ;;
-    review) say "review:"; if has node; then review_mjs uninstall all; else warn "  node not found; skipped"; fi; return ;;
+    review)
+      say "review:"
+      has node || { warn "  node not found; skipped"; return; }
+      local a on=""; for a in $AGENTS; do agent_on "$a" && on="$on $a"; done
+      [ -n "$on" ] && warn "  agents still installed:$on — they need the review mod; remove them with ./install.sh uninstall agents"
+      review_mjs uninstall herdr; return ;;
+    agents)
+      say "agents:"
+      has node || { warn "  node not found; skipped"; return; }
+      local a; for a in ${AGENT_PICK:-$AGENTS}; do review_mjs uninstall "$a"; done; return ;;
   esac
   for n in $name; do
     rm -rf "${HERDR_HOME:?}/mods/$n"
@@ -150,6 +192,7 @@ watch_all() {
   for t in $1; do
     case "$t" in
       git|minimal|sidebar|usage) bash "$REPO_ROOT/herdr-$t/sync.sh" --watch & pids="$pids $!" ;;
+      agents) dim "agents load from their install location; re-run ./install.sh install agents after changes" ;;
       review)
         has node || { warn "node not found; not watching review"; continue; }
         ( review_sync() { review_mjs sync herdr; }
@@ -174,8 +217,14 @@ main() {
   case "$cmd" in -h|--help|help) usage "$self"; exit 0 ;; esac
   if [ "$target" = all ]; then targets="$TARGETS"
   else
-    case " $TARGETS " in *" $target "*) targets="$target" ;; *) die "unknown target '$target' (all | ${TARGETS// / | })" ;; esac
+    case " $TARGETS agents " in *" $target "*) targets="$target" ;; *) die "unknown target '$target' (all | ${TARGETS// / | } | agents)" ;; esac
   fi
+  # `agents [claude|pi]`: pick one integration.
+  AGENT_PICK=""
+  if [ "$target" = agents ] && [ -n "${3:-}" ]; then
+    case " $AGENTS " in *" $3 "*) AGENT_PICK="$3" ;; *) die "unknown agent '$3' (${AGENTS// / | })" ;; esac
+  fi
+  [ "$target" = agents ] && STATUS_AGENTS=1
 
   case "$cmd" in
     install|sync)
