@@ -16,8 +16,13 @@ import { join } from "node:path";
 const HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
 const FILE = process.env.KEYS_FILE || join(HOME, "keys.json");
 
-/** @param {string[]} argv */
-export function keys(argv) {
+/**
+ * @param {string[]} argv
+ * @param {string} [file] keys.json (default: $KEYS_FILE, else <HERDR_APP_HOME>/keys.json)
+ * @returns {string} a line to print ("" for nothing; lines starting "warn" are warnings)
+ */
+export function keys(argv, file = FILE) {
+  const FILE = file;
   const [cmd, key, wantRaw, ...rest] = argv;
   if (!cmd || !key || !wantRaw) throw new Error("usage: keys.mjs ensure|remove|state <key> <command-json> [--replace <json>] [--tag <name>]");
   const want = JSON.parse(wantRaw);
@@ -58,7 +63,7 @@ export function keys(argv) {
   return `${migrating ? "rebound" : "bound  "} ${key} -> ${wantRaw} in keys.json (${note})`;
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("keys.mjs")) {
+if (process.argv[1] && /keys\.mjs$/.test(process.argv[1])) {
   try { const out = keys(process.argv.slice(2)); if (out) console.log(out); }
   catch (e) { console.error(String(/** @type {Error} */ (e).message ?? e)); process.exit(1); }
 }

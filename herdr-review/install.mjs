@@ -83,13 +83,35 @@ const die = (msg) => { console.error(c.err(`error: ${msg}`)); process.exit(1); }
 const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 /** @type {(p: string, v: unknown) => void} */
 const writeJson = (p, v) => writeFileSync(p, JSON.stringify(v, null, 2) + "\n");
+const WIN = process.platform === "win32";
+/**
+ * spawnSync that also starts Windows .cmd/.bat shims (claude, pi from npm are shims, and
+ * Node won't run those without a shell). Missing programs still report ENOENT.
+ * @param {string} cmd
+ * @param {string[]} args
+ */
+function spawnCompat(cmd, args) {
+  if (!WIN) return spawnSync(cmd, args, { encoding: "utf8" });
+  const exts = (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";").filter(Boolean);
+  let exe = null;
+  for (const d of (process.env.PATH || "").split(";")) {
+    for (const e of exts) { const p = join(d, cmd + e); if (d && existsSync(p)) { exe = p; break; } }
+    if (exe) break;
+  }
+  if (!exe) return spawnSync(cmd, args, { encoding: "utf8" });
+  if (!/\.(cmd|bat)$/i.test(exe)) return spawnSync(exe, args, { encoding: "utf8" });
+  /** @param {string} a */
+  const q = (a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a);
+  return spawnSync(`"${exe}" ${args.map(q).join(" ")}`, { encoding: "utf8", shell: true });
+}
+
 /** @type {() => string} */
 const version = () => readJson(join(REPO, "package.json")).version;
 
 /** @param {string} cmd @param {string[]} args
  *  @param {{ quiet?: boolean, allowFail?: boolean }} [opts] @returns {{ ok: boolean, stdout: string, stderr: string, missing?: boolean }} */
 function sh(cmd, args, { quiet = false, allowFail = false } = {}) {
-  const r = spawnSync(cmd, args, { encoding: "utf8" });
+  const r = spawnCompat(cmd, args);
   if (/** @type {NodeJS.ErrnoException} */ (r.error)?.code === "ENOENT") {
     if (allowFail) return { ok: false, missing: true, stdout: "", stderr: `${cmd} not found` };
     die(`${cmd} not found on PATH`);
@@ -100,7 +122,7 @@ function sh(cmd, args, { quiet = false, allowFail = false } = {}) {
   return { ok, stdout: r.stdout || "", stderr: r.stderr || "" };
 }
 /** @type {(cmd: string) => boolean} */
-const has = (cmd) => /** @type {NodeJS.ErrnoException | undefined} */ (spawnSync(cmd, ["--version"], { encoding: "utf8" }).error)?.code !== "ENOENT";
+const has = (cmd) => /** @type {NodeJS.ErrnoException | undefined} */ (spawnCompat(cmd, ["--version"]).error)?.code !== "ENOENT";
 
 /** Relative paths of every file under dir, skipping `skip(name)`.  @param {string} dir
  *  @param {(name: string) => boolean} [skip] @param {string} [base] @returns {string[]} */
@@ -164,7 +186,7 @@ function modInstall({ src: MOD_SRC, dest: MOD_DEST }, { link }) {
   if (link) {
     if (isLink(MOD_DEST)) rmSync(MOD_DEST);
     else if (existsSync(MOD_DEST)) rmSync(MOD_DEST, { recursive: true });
-    symlinkSync(MOD_SRC, MOD_DEST, "dir");
+    symlinkSync(MOD_SRC, MOD_DEST, WIN ? "junction" : "dir"); // junctions need no admin rights on Windows
     log(`  linked ${MOD_DEST} → ${MOD_SRC}`);
   } else {
     if (isLink(MOD_DEST)) rmSync(MOD_DEST);
@@ -340,10 +362,10 @@ function piEntries() {
   const base = dirname(PI_SETTINGS);
   return (s?.packages ?? []).filter((p) => {
     if (typeof p !== "string" || /^(npm|git|https?|ssh):/.test(p)) return false;
-    const abs = resolve(base, p.replace(/^~(?=\/)/, homedir()));
+    const abs = resolve(base, p.replace(/^~(?=[\\/])/, homedir()));
     return abs === PI_SRC || readJson(join(abs, "package.json"))?.name === PLUGIN
       || abs.endsWith(join("mods", MOD_NAME, "integrations", "pi"));
-  }).map((p) => ({ raw: p, abs: resolve(base, p.replace(/^~(?=\/)/, homedir())) }));
+  }).map((p) => ({ raw: p, abs: resolve(base, p.replace(/^~(?=[\\/])/, homedir())) }));
 }
 
 /** @returns {Status} */
