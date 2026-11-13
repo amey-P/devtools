@@ -1,6 +1,6 @@
 # herdr-app devtools
 
-Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). They live in one repo and one script installs them on macOS or Linux.
+Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). They live in one repo and one script installs them on macOS, Linux or Windows.
 
 | Project | Installs | Into `$HERDR_APP_HOME` |
 |---|---|---|
@@ -32,9 +32,17 @@ curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | b
 curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash -s -- install review   # pass a command/target
 ```
 
+On Windows (PowerShell), run `.\install.ps1` in a clone (same commands and targets), or skip the clone:
+
+```powershell
+irm https://raw.githubusercontent.com/amey-P/devtools/main/install.ps1 | iex
+```
+
+That clones into `%LOCALAPPDATA%\herdr-devtools`. Both scripts only bootstrap: the work happens in `install.mjs`, which you can also run directly with `node install.mjs …` on any OS.
+
 The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a clone already exists, and then runs that copy's `install.sh`.
 
-**Requirements:** `bash`, `rsync`, `git` (for the bootstrap). The `review` and `usage` targets also need Node.js 18+. When a tool is missing, the script prints the install command for your OS (brew, apt, dnf, pacman, apk or zypper). The `agents` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
+**Requirements:** Node.js 18+, and `git` for the bootstrap. Nothing else: no rsync, no bash on Windows. When Node is missing, the scripts print the install command for your OS (brew, apt, dnf, pacman, apk, zypper or winget). Herdr's home is `HERDR_APP_HOME`, else what `herdr-app --help` reports, else `~/.config/herdr-app`. The `agents` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
 
 | Variable | Default | |
 |---|---|---|
@@ -94,9 +102,10 @@ node scripts/same-runtime.mjs main   # prove a change touched only comments (JSD
 - `tsconfig.json` and `*.d.ts` are dev-only; the installers never copy them.
 - Give arrays built by `push` in a loop an explicit type: tsc once took ~10 minutes inferring one (`herdr-git` `statusCard`).
 
-- Shared helpers live in `scripts/lib.sh` (`sync_mod`, `sync_file`, `watch_loop`, `need`). They are portable across BSD/macOS and GNU/Linux userlands and bash 3.2+.
+- `install.mjs` does all installing (a mirror copy like `rsync --delete`, content-hash status, an mtime poll for `watch`); `scripts/keys.mjs` does the keys.json edits. Each project's `sync.sh` is a one-line wrapper around it.
 
 ## Adding a project
 
-1. Create `herdr-<name>/` and add a `sync.sh` that sources `../scripts/lib.sh` and calls `sync_mod`. `herdr-sidebar/sync.sh` is the shortest example.
-2. In `install.sh`, add the name to `TARGETS` and add a case in `status_target` and `uninstall_target`.
+1. Create `herdr-<name>/` with its mod folder(s).
+2. In `install.mjs`, add the name to `TARGETS` and an entry to `SPEC` (its mods, files and key bindings); install, status, watch and uninstall all read from that.
+3. Optionally add a `sync.sh` wrapper like `herdr-sidebar/sync.sh`.

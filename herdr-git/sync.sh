@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Copy the git mod (this folder) into the Herdr app's home as mods/git. Safe to re-run.
+# Copy this project into the Herdr app's home. Safe to re-run.
 #   ./sync.sh          copy once
 #   ./sync.sh --watch  copy again whenever a file here changes (Ctrl-C to stop)
+# A wrapper around the repo's install.mjs (Node 18+): node install.mjs install|watch git
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-. "$HERE/../scripts/lib.sh"
-
-sync_once() { sync_mod "$HERE" git --exclude sync.sh --exclude test; }
-
-sync_once
-[ "${1:-}" = "--watch" ] && watch_loop sync_once "$HERE"
-exit 0
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "${1:-}" = "--watch" ]; then exec node "$ROOT/install.mjs" watch git; fi
+exec node "$ROOT/install.mjs" install git
