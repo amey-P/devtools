@@ -1,17 +1,17 @@
 // Git: the repo's commit graph, working-tree status, branches and worktrees, read-only.
-// Floating with `peek` it is a drawer (drawer.js); opened with mod.open it is a window.
+// With `props().sidebar` it is a section of the sidebar (sidebar.js); opened with mod.open it is a window.
 // It follows the focused terminal's folder (falling back to the space's), or
 // `props().folder` when given. Works in ordinary checkouts, linked worktrees,
 // submodules and bare repos, locally or on a space's machine.
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { spaces, panes, focused, props, placement, appHome, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
+import { spaces, panes, focused, props, run, appHome, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 import { discoverFirst } from "./discover.js";
 import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadRefs, loadOperation, loadLog, classifyChange, dirtyCount } from "./load.js";
 import { norm, base, repoName, samePath } from "./paths.js";
 import { ICON, alpha, palette, hashOf, initials, ago } from "./ui.js";
-import { drawer, drawerAvail } from "./drawer.js";
+import { sidebar, naturalHeight, windowHeight, CLOSED } from "./sidebar.js";
 import { join } from "./paths.js";
 
 /** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult } from "./types" */
@@ -42,12 +42,8 @@ function location() {
   if (space?.folder) list.push(space.folder);
   return { candidates: list.filter((c, i) => list.findIndex((d) => samePath(c, d)) === i), on: space?.machine ?? null };
 }
-/**
- * Where this copy floats. `props().preview` draws the open drawer in an
- * ordinary pane, for checking its look without hovering.
- * @returns {ReturnType<typeof placement>}
- */
-const place = () => placement() ?? (props()?.preview ? { edge: "left", align: "start", vertical: true, hovered: true, dragging: false } : null);
+/** This copy is the sidebar section. @returns {boolean} */
+const inSidebar = () => Boolean(props()?.sidebar);
 /** @type {() => string} */
 const key = () => JSON.stringify(location());
 
@@ -66,17 +62,21 @@ export default class Git extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
-    this.size = { width: 600, height: 800 };
+    this.size = inSidebar() ? { width: 248, height: CLOSED } : { width: 600, height: 800 };
     this.all = true;
     /** @type {Record<string, boolean>} */
     this.folded = {};
     try { this.folded = JSON.parse(localStorage.getItem("folded") ?? "{}") ?? {}; } catch { /* storage unavailable */ }
-    // The drawer loads history the first time it opens; other views load at once.
-    this.awake = !place();
-    this.avail = drawerAvail(null, undefined);
+    // The sidebar section never shows history, so it never loads the log.
+    this.awake = !inSidebar();
+    this.winH = windowHeight(null, undefined);
     this.statusH = 0;
+    /** The height last asked of the sidebar block, while open. @type {number | null} */
+    this.asked = null;
+    this.closing = false;
+    this.measured = false;
     cx.spawn(async () => {
-      try { this.avail = drawerAvail(await readTextFile(join(appHome(), "window.json")), Number(settings().zoom) || 1); } catch { /* keep the default */ }
+      try { this.winH = windowHeight(await readTextFile(join(appHome(), "window.json")), Number(settings().zoom) || 1); } catch { /* keep the default */ }
     });
     /** @type {"status" | "all" | null} */
     this.pending = null;
@@ -111,6 +111,23 @@ export default class Git extends View {
 
   /** The status card's height as last drawn, margin included. */
   statusCardHeight() { return this.statusH; }
+
+  /**
+   * Opens or closes the sidebar block. Herdr saves the size with the layout,
+   * so the section comes back the way it was left.
+   * @param {boolean} open whether it is open now
+   */
+  toggleSidebar(open) {
+    this.asked = open ? null : this.sidebarTarget();
+    // Until the block has shrunk, render must not mistake it for open and grow it back.
+    this.closing = open;
+    run("layout.resize", { id: props()?.block ?? "git", px: this.asked ?? CLOSED });
+  }
+
+  /** How tall the open section should be: its content, within 45% of the window. */
+  sidebarTarget() {
+    return Math.round(Math.max(140, Math.min(naturalHeight(this, theme()), this.winH * 0.45)));
+  }
 
   /** The commit details panel's height. */
   detailsHeight() { return Math.min(260, this.size.height * 0.38); }
@@ -399,9 +416,10 @@ export default class Git extends View {
 
   /**
    * @param {Theme} t
+   * @param {{ maxList?: number }} [opts] maxList caps the file list's height (px)
    * @returns {Element | null}
    */
-  statusCard(t) {
+  statusCard(t, { maxList = 0 } = {}) {
     const s = this.status;
     if (!s) return null;
     const groups = [
@@ -463,7 +481,7 @@ export default class Git extends View {
         height += 24;
       }
     }
-    const max = Math.max(90, this.size.height * (this.detail ? 0.2 : 0.34));
+    const max = maxList || Math.max(90, this.size.height * (this.detail ? 0.2 : 0.34));
     this.statusH = 50 + Math.min(height + 8, max) + 12;
     return card.child(summary).child(div().h(Math.min(height + 8, max)).relative().border_t(1).border_color(t.border)
       .child(v_flex().id("git-status-list").absolute().inset_0().overflow_y_scroll().p(4).children(rows))
@@ -693,11 +711,9 @@ export default class Git extends View {
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
     const t = theme();
-    const where = place();
-    if (where?.hovered && !this.awake) { this.awake = true; this.refresh(cx); }
     const root = v_flex().id("git").size_full().min_h(0).relative().bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.handle)
-      .on_size_change((size, cx) => { this.size = size; cx.notify(); })
+      .on_size_change((size, cx) => { this.size = size; this.measured = true; cx.notify(); })
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "down" || k === "j") this.move(1, cx);
@@ -708,7 +724,19 @@ export default class Git extends View {
         else return;
         cx.stop_propagation();
       });
-    if (where) return root.size_full().child(drawer(this, t, where));
+    if (inSidebar()) {
+      // Open: follow the content as it changes, but only by more than a row, so
+      // the saved layout isn't rewritten on every refresh.
+      // Before the first measurement this.size is a guess: never resize from it.
+      if (!this.measured) { /* wait */ }
+      else if (this.size.height <= CLOSED + 4) this.closing = false;
+      else if (!this.closing && this.size.width >= 160) {
+        const want = this.sidebarTarget();
+        if (this.asked == null) this.asked = this.size.height;
+        if (Math.abs(want - this.asked) > 24) { this.asked = want; run("layout.resize", { id: props()?.block ?? "git", px: want }); }
+      }
+      return root.bg(t.chrome).child(sidebar(this, t));
+    }
     if (!this.root) {
       return root.child(this.header(t)).child(div().flex_1().relative().child(
         this.loading || !this.error ? this.empty(t, "Reading repository…", "")
