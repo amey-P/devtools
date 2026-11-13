@@ -84,6 +84,20 @@
                 }
               }
             }
+          ],
+          "floating": [
+            {
+              "id": "git-drawer",
+              "content": {
+                "mod": "git",
+                "props": {
+                  "drawer": true
+                }
+              },
+              "edge": "left",
+              "align": "start",
+              "peek": 40
+            }
           ]
         }
       ]
