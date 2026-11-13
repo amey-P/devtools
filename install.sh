@@ -148,7 +148,7 @@ show() { # <label> <state>
 status_target() {
   local r=0
   case "$1" in
-    git)     show mods/git "$(mod_state "$REPO_ROOT/herdr-git" git --exclude sync.sh)" || r=1 ;;
+    git)     show mods/git "$(mod_state "$REPO_ROOT/herdr-git" git --exclude sync.sh --exclude test)" || r=1 ;;
     sidebar) show mods/space-tree "$(mod_state "$REPO_ROOT/herdr-sidebar/space-tree" space-tree)" || r=1 ;;
     usage)
       show mods/agent-usage "$(mod_state "$REPO_ROOT/herdr-usage/agent-usage" agent-usage)" || r=1

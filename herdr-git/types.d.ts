@@ -104,3 +104,90 @@ export interface Graph { rows: GraphRow[]; cols: number; index: Map<string, numb
 
 /** What layout() reads from a commit. */
 export type GraphCommit = Pick<Commit, "hash" | "parents" | "wip">;
+
+// ---- discovery and repo state (discover.js, load.js) -------------------------------------------------------------
+
+/** What `exec` resolves with. */
+export interface ExecResult { code: number; stdout: string; stderr: string }
+/** Runs git with these args in a folder. */
+export type RunGit = (args: string[], cwd: string) => Promise<ExecResult>;
+/** Runs git in the repo's own folder. */
+export type RunIn = (args: string[]) => Promise<ExecResult>;
+/** Reads a text file; null (or a rejection) when it's missing. */
+export type ReadFile = (path: string) => Promise<string | null>;
+
+/**
+ * A repository found by discover(). Paths use forward slashes.
+ * - main: an ordinary checkout; linked: a `git worktree add` checkout;
+ * - bare: no work tree (`--bare`, or the `.bare` + `.git` file layout);
+ * - submodule: a checkout inside another repo.
+ */
+export interface Repo {
+  kind: "main" | "linked" | "bare" | "submodule";
+  /** The work tree, null for bare. */
+  root: string | null;
+  /** This checkout's own git dir (…/.git, …/.git/worktrees/<name>, …/modules/<x>). */
+  gitDir: string;
+  /** The shared git dir: refs, objects, config. */
+  commonDir: string;
+  /** For submodules, the outer repo's work tree. */
+  superproject: string | null;
+  /** gitDir differs from commonDir (a linked worktree). */
+  linked: boolean;
+}
+
+/** A local branch (for-each-ref). */
+export interface Branch {
+  name: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  /** The upstream was deleted. */
+  gone: boolean;
+  /** Committer time, seconds. */
+  at: number;
+  oid: string;
+  /** The worktree it's checked out in, if any. */
+  worktree: string | null;
+  /** HEAD of this checkout. */
+  head: boolean;
+  subject: string;
+}
+
+/** One checkout from `git worktree list`. */
+export interface Worktree {
+  path: string;
+  head: string | null;
+  branch: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+  /** Changed tracked files, null when not read. */
+  dirty: number | null;
+}
+
+/** One `git stash list` entry. */
+export interface Stash { ref: string; subject: string; at: number }
+
+/** A git operation in progress. */
+export interface Operation {
+  op: "rebase" | "merge" | "cherry-pick" | "revert" | "bisect";
+  step: number | null;
+  total: number | null;
+  /** The branch being rebased. */
+  branch: string | null;
+  /** Short oid: the rebase base, or the commit being merged/picked. */
+  onto: string | null;
+}
+
+/** loadRefs(). */
+export interface RefsState {
+  branches: Branch[];
+  worktrees: Worktree[];
+  stashes: Stash[];
+  /** name → fetch URL */
+  remotes: Record<string, string>;
+  /** Latest reachable tag. */
+  tag: string | null;
+}

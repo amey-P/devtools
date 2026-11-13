@@ -6,7 +6,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/../scripts/lib.sh"
 
-sync_once() { sync_mod "$HERE" git --exclude sync.sh; }
+sync_once() { sync_mod "$HERE" git --exclude sync.sh --exclude test; }
 
 sync_once
 [ "${1:-}" = "--watch" ] && watch_loop sync_once "$HERE"

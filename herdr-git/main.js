@@ -1,22 +1,24 @@
-// Git: the repo's commit graph and working-tree status, read-only.
-// Opens as a pane beside the terminals (ctrl-shift-g). It shows the repo of
-// the terminal in its own tab, or `props().folder` when given.
+// Git: the repo's commit graph, working-tree status, branches and worktrees, read-only.
+// It follows the focused terminal's folder (falling back to the space's), or
+// `props().folder` when given. Works in ordinary checkouts, linked worktrees,
+// submodules and bare repos, locally or on a space's machine.
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { spaces, panes, focused, props, exec, watchFolder, theme, settings, nextCommand } from "herdr";
+import { spaces, panes, focused, props, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
+import { discoverFirst } from "./discover.js";
+import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadRefs, loadOperation, loadLog, classifyChange, dirtyCount } from "./load.js";
+import { norm, base, repoName, samePath } from "./paths.js";
 
-/** @import { Commit, Detail, NumStat, Ref, Status, Theme } from "./types" */
+/** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult } from "./types" */
 /** @import { AsyncContext, Color, Context, Element } from "gpui-kit" */
 /** @import { Props } from "gpui-shell" */
 
 /** @type {(name: string) => string} */
 const ICON = (name) => `mods/git/${name}.svg`;
-// Reads write nothing under .git (no index refresh, lock or fsmonitor
-// cookie), so the folder watch never sees our own reads.
-const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false", "-c", "color.ui=false"];
-const LIMIT = 400;
-const US = "\x1f", RS = "\x1e";
+const US = "\x1f";
+/** @type {RefsState} */
+const NO_REFS = { branches: [], worktrees: [], stashes: [], remotes: {}, tag: null };
 
 /**
  * A theme color with a new hex-alpha suffix: (#rrggbb, "1f") → #rrggbb1f.
@@ -48,87 +50,35 @@ function ago(sec) {
 }
 
 /**
- * The folder this copy of the mod watches and the machine it runs commands on.
- * @returns {{ cwd: string | null, on: string | null }}
+ * Folders to look for a repo in, best first, and the machine to run git on.
+ * The focused terminal wins; a terminal cd'd out of any repo falls back to
+ * the tab's other terminals, then the space's folder.
+ * @returns {{ candidates: string[], on: string | null }}
  */
 function location() {
   const p = props() ?? {};
-  if (p.folder) return { cwd: p.folder, on: p.on ?? null };
-  const all = panes(), me = p.pane ? all.find((x) => x.pane === p.pane) : null;
-  const tab = me?.tab ?? focused()?.tab;
+  if (p.folder) return { candidates: [p.folder], on: p.on ?? null };
+  const all = panes(), f = focused(), me = p.pane ? all.find((x) => x.pane === p.pane) : null;
+  const tab = me?.tab ?? f?.tab;
   const space = spaces().find((s) => s.tabs.some((t) => t.id === tab)) ?? spaces().find((s) => s.active);
-  const term = all.find((x) => x.tab === tab && x.terminal && x.cwd);
-  return { cwd: term?.cwd || space?.folder || null, on: space?.machine ?? null };
+  /** @type {string[]} */
+  const list = [];
+  if (f?.cwd && f.tab === tab) list.push(f.cwd);
+  const fp = f?.pane ? all.find((x) => x.pane === f.pane) : null;
+  if (fp?.cwd && fp.tab === tab) list.push(fp.cwd);
+  for (const x of all) if (x.tab === tab && x.terminal && x.cwd) list.push(x.cwd);
+  if (space?.folder) list.push(space.folder);
+  return { candidates: list.filter((c, i) => list.findIndex((d) => samePath(c, d)) === i), on: space?.machine ?? null };
 }
 /** @type {() => string} */
 const key = () => JSON.stringify(location());
 
-/** @param {string} text @returns {Status} */
-function parseStatus(text) {
-  /** @type {Status} */
-  const out = { branch: null, oid: null, upstream: null, ahead: 0, behind: 0, staged: [], modified: [], untracked: [], conflicts: [] };
-  const parts = text.split("\0");
-  for (let i = 0; i < parts.length; i++) {
-    const line = parts[i];
-    if (!line) continue;
-    if (line.startsWith("# ")) {
-      const [, k, ...v] = line.split(" ");
-      if (k === "branch.head") out.branch = v.join(" ") === "(detached)" ? null : v.join(" ");
-      else if (k === "branch.oid") out.oid = v[0] === "(initial)" ? null : v[0];
-      else if (k === "branch.upstream") out.upstream = v.join(" ");
-      else if (k === "branch.ab") { out.ahead = Math.abs(+v[0]); out.behind = Math.abs(+v[1]); }
-      continue;
-    }
-    const f = line.split(" ");
-    if (f[0] === "1" || f[0] === "2") {
-      const xy = f[1], path = f.slice(f[0] === "1" ? 8 : 9).join(" ");
-      if (f[0] === "2") i++; // the original path follows as its own entry
-      if (xy[0] !== ".") out.staged.push({ path, code: xy[0] });
-      if (xy[1] !== ".") out.modified.push({ path, code: xy[1] });
-    } else if (f[0] === "u") out.conflicts.push({ path: f.slice(10).join(" "), code: "U" });
-    else if (f[0] === "?") out.untracked.push({ path: line.slice(2), code: "?" });
-  }
-  return out;
-}
-
-/** @param {string} text @returns {Record<string, NumStat>} */
-function parseNumstat(text) {
-  /** @type {Record<string, NumStat>} */
-  const stats = {};
-  for (const entry of text.split("\0")) {
-    const [a, d, ...rest] = entry.split("\t");
-    if (!rest.length) continue;
-    stats[rest.join("\t").replace(/^\n/, "")] = { add: Number(a) || 0, del: Number(d) || 0, binary: a === "-" };
-  }
-  return stats;
-}
-
-/**
- * @param {string} text the %D decorate list
- * @param {string[]} remotes remote names from `git remote`
- * @returns {Ref[]}
- */
-function parseRefs(text, remotes) {
-  /** @type {Ref[]} */
-  const refs = [];
-  for (const raw of text.split(",").map((s) => s.trim()).filter(Boolean)) {
-    if (raw.startsWith("HEAD -> ")) refs.push({ kind: "head", name: raw.slice(8) });
-    else if (raw === "HEAD") refs.push({ kind: "detached", name: "HEAD" });
-    else if (raw.startsWith("tag: ")) refs.push({ kind: "tag", name: raw.slice(5) });
-    else {
-      const remote = remotes.find((r) => raw.startsWith(r + "/"));
-      if (remote) { if (!raw.endsWith("/HEAD")) refs.push({ kind: "remote", remote, name: raw.slice(remote.length + 1) }); }
-      else refs.push({ kind: "local", name: raw });
-    }
-  }
-  // A remote branch on the same commit as its local twin rides inside the local pill.
-  for (const r of refs) if (r.kind === "remote") {
-    const twin = refs.find((l) => (l.kind === "local" || l.kind === "head") && l.name === r.name);
-    if (twin) { twin.synced = (twin.synced ?? []).concat(r.remote); r.hidden = true; }
-  }
-  const order = { head: 0, detached: 0, local: 1, remote: 2, tag: 3 };
-  return refs.filter((r) => !r.hidden).sort((a, b) => order[a.kind] - order[b.kind]);
-}
+/** @param {Operation} op @returns {string} */
+const opLabel = (op) => {
+  const verb = { rebase: "Rebasing", merge: "Merging", "cherry-pick": "Cherry-picking", revert: "Reverting", bisect: "Bisecting" }[op.op];
+  const what = op.op === "rebase" ? (op.branch ? ` ${op.branch}` : "") + (op.onto ? ` onto ${op.onto}` : "") : op.onto ? ` ${op.onto}` : "";
+  return verb + what;
+};
 
 export default class Git extends View {
   /**
@@ -142,9 +92,13 @@ export default class Git extends View {
     this.all = true;
     /** @type {Record<string, boolean>} */
     this.folded = {};
+    /** @type {"status" | "all" | null} */
+    this.pending = null;
     this.reset();
     this.refresh(cx);
-    cx.timer.every(10000, (cx) => this.refresh(cx));
+    // The watch covers local repos; this timer covers remote ones and anything it missed.
+    cx.timer.every(10000, (cx) => this.refresh(cx, this.watched.length ? "status" : "all"));
+    cx.timer.every(30000, (cx) => this.refresh(cx));
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
@@ -160,91 +114,158 @@ export default class Git extends View {
   }
 
   reset() {
-    this.root = null; this.on = null; this.error = null; this.status = null; this.commits = /** @type {Commit[]} */ ([]); this.graph = null;
-    this.stash = 0; this.sel = null; this.detail = null; this.watched = null; this.loaded = false;
-  }
-
-  /**
-   * @param {string} root
-   * @param {Context} cx
-   */
-  watch(root, cx) {
-    if (this.on || /** @type {string | null} */ (this.watched) === root) return;
+    /** @type {string | undefined} */
+    this.context = this.context;
+    /** @type {Repo | null} */
+    this.repo = null;
     /** @type {string | null} */
-    this.watched = root;
-    cx.spawn(async (cx) => {
-      try {
-        while (this.watched === root) {
-          await watchFolder(root);
-          if (this.watched === root) this.refresh(cx);
-        }
-      } catch { this.watched = null; }
-    });
+    this.root = null;
+    /** @type {string | null} */
+    this.on = null;
+    /** @type {string | null} */
+    this.error = null;
+    /** @type {Status | null} */
+    this.status = null;
+    /** @type {{ branch: string | null, oid: string | null }} */
+    this.head = { branch: null, oid: null };
+    /** @type {RefsState} */
+    this.refs = NO_REFS;
+    /** @type {Operation | null} */
+    this.op = null;
+    this.commits = /** @type {Commit[]} */ ([]);
+    this.graph = null;
+    this.sel = null; this.detail = null; this.loaded = false;
+    /** @type {string[]} */
+    this.watched = this.watched ?? [];
+    this.unwatch();
+  }
+
+  /** Stops the folder watches (each loop ends at its next wake-up). */
+  unwatch() { this.watchGen = (this.watchGen ?? 0) + 1; this.watched = []; }
+
+  /**
+   * Git for this repo, on its machine.
+   * @param {Repo} repo
+   * @param {string | null} on
+   */
+  runners(repo, on) {
+    const cwd = repo.root ?? repo.gitDir;
+    /** @param {string[]} args @returns {Promise<ExecResult>} */
+    const git = (args) => exec("git", [...READ, ...args], { cwd, on });
+    /** @param {string} path @param {string[]} args @returns {Promise<ExecResult>} */
+    const gitAt = (path, args) => exec("git", [...READ, ...args], { cwd: path, on });
+    /** @param {string} path */
+    const read = (path) => readTextFile(path, { on });
+    return { git, gitAt, read };
   }
 
   /**
+   * Watches the work tree and both git dirs (a linked worktree's HEAD and
+   * index live outside its folder). Local machines only: remote ones poll.
+   * @param {Repo} repo
    * @param {Context} cx
    */
-  refresh(cx) {
-    if (this.loading) { this.again = true; return; }
-    const { cwd, on } = location(), context = key();
-    if (context !== this.context) {
-      /** @type {string | undefined} */
-      this.context = context; this.reset(); }
-    if (!cwd) { this.error = "No folder"; return; }
+  watch(repo, cx) {
+    if (this.on) return;
+    const dirs = [repo.root, repo.gitDir, repo.commonDir].filter(Boolean)
+      .filter((d, i, a) => a.findIndex((e) => samePath(d, e)) === i)
+      // A main checkout's .git sits inside its root: one watch covers both.
+      .filter((d, _i, a) => !a.some((e) => e !== d && norm(d).startsWith(norm(e) + "/")));
+    if (dirs.length === this.watched.length && dirs.every((d, i) => samePath(d, this.watched[i]))) return;
+    this.unwatch();
+    this.watched = dirs;
+    const gen = this.watchGen;
+    for (const d of dirs) {
+      cx.spawn(async (cx) => {
+        try {
+          while (this.watchGen === gen) {
+            const changed = await watchFolder(d);
+            if (this.watchGen !== gen || !this.repo) return;
+            const kinds = changed.length ? changed.map((p) => classifyChange(p, this.repo)) : ["refs"];
+            if (kinds.includes("refs")) this.schedule(cx, "all");
+            else if (kinds.includes("status")) this.schedule(cx, "status");
+          }
+        } catch { if (this.watchGen === gen) this.watched = this.watched.filter((w) => w !== d); }
+      });
+    }
+  }
+
+  /**
+   * Coalesces bursts of changes (a checkout touches thousands of files) into one refresh.
+   * @param {Context} cx
+   * @param {"status" | "all"} level
+   */
+  schedule(cx, level) {
+    const had = this.pending;
+    this.pending = had === "all" || level === "all" ? "all" : "status";
+    if (had) return;
+    cx.timer.after(250, (cx) => { const l = this.pending ?? "all"; this.pending = null; this.refresh(cx, l); });
+  }
+
+  /**
+   * Reloads. "status" rereads only the working tree (a file saved); "all"
+   * also rediscovers the repo and rereads refs, operation and history.
+   * @param {Context} cx
+   * @param {"status" | "all"} [level]
+   */
+  refresh(cx, level = "all") {
+    if (this.loading) { this.again = this.again === "all" || level === "all" ? "all" : "status"; return; }
+    const { candidates, on } = location(), context = key();
+    if (context !== this.context) { this.context = context; level = "all"; }
+    if (!candidates.length) { this.reset(); this.error = "No folder"; return; }
+    if (!this.repo) level = "all";
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
-        if (key() !== context) return;
-        if (top.code !== 0) { this.reset(); this.error = "Not a git repository"; this.cwd = cwd; return; }
-        const root = top.stdout.trim();
-        /** @param {string[]} args */
-        const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
-        const [st, staged, unstaged, remotes, stash] = await Promise.all([
-          git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"]),
-          git(["diff", "--cached", "--numstat", "-z", "--no-renames"]),
-          git(["diff", "--numstat", "-z", "--no-renames"]),
-          git(["remote"]),
-          git(["stash", "list", "--format=%h"]),
-        ]);
-        if (st.code !== 0) throw new Error(st.stderr.trim());
-        const status = parseStatus(st.stdout);
-        const sStats = parseNumstat(staged.stdout), uStats = parseNumstat(unstaged.stdout);
-        for (const f of status.staged) Object.assign(f, sStats[f.path] ?? {});
-        for (const f of [...status.modified, ...status.conflicts]) Object.assign(f, uStats[f.path] ?? {});
-        const remoteNames = remotes.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
-
-        /** @type {Commit[]} */
-        let commits = [];
-        if (status.oid) {
-          const log = await git(["log", this.all ? "--all" : "HEAD", "--topo-order", "-n", String(LIMIT),
-            `--format=${RS}%H${US}%P${US}%an${US}%ae${US}%at${US}%D${US}%s`]);
-          if (log.code === 0) commits = log.stdout.split(RS).map((r) => r.replace(/^\n+|\n+$/g, "")).filter(Boolean).map((r) => {
-            const [hash, parents, author, email, at, refs, subject] = r.split(US);
-            return { hash, parents: parents ? parents.split(" ") : [], author, email, at: +at, refs: parseRefs(refs ?? "", remoteNames), subject: subject ?? "", head: hash === status.oid };
-          });
+        /** @type {Repo} */
+        let repo = this.repo;
+        if (level === "all") {
+          /** @type {(args: string[], cwd: string) => Promise<ExecResult>} */
+          const probe = (args, cwd) => exec("git", args, { cwd, on });
+          const found = await discoverFirst(candidates, probe, (p) => readTextFile(p, { on }));
+          if (key() !== context) return;
+          if (!found) { this.reset(); this.error = "Not a git repository"; this.cwd = candidates[0]; return; }
+          repo = found.repo;
+          // Another repo: start clean. The same one (focus moved within it): keep what's shown.
+          if (!this.repo || !samePath(this.repo.gitDir, repo.gitDir) || this.on !== on) this.reset();
         }
-        const dirty = status.staged.length + status.modified.length + status.untracked.length + status.conflicts.length;
-        if (dirty && status.oid) commits.unshift({ hash: "wip", wip: true, parents: [status.oid], refs: [], subject: "Uncommitted changes", author: "", email: "", at: 0 });
+        const { git, gitAt, read } = this.runners(repo, on);
+
+        if (level === "status") {
+          const status = await loadStatus(repo, git);
+          if (key() !== context) return;
+          const wasDirty = this.commits[0]?.wip ?? false, dirty = dirtyCount(status) > 0;
+          this.status = status;
+          // HEAD moved or the WIP row appears/disappears: the history changes too.
+          if (status?.oid !== this.head.oid || dirty !== wasDirty) { this.again = "all"; return; }
+          return;
+        }
+
+        const [status, refs, op, head] = await Promise.all([
+          loadStatus(repo, git), loadRefs(repo, git, gitAt).catch(() => NO_REFS), loadOperation(repo, read), repo.root ? null : loadHead(git),
+        ]);
+        const oid = status ? status.oid : head?.oid ?? null;
+        const commits = await loadLog(repo, git, { all: this.all, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) });
         if (key() !== context) return;
 
         const sameHistory = this.graph && this.commits.length === commits.length && this.commits.every((c, i) => c.hash === commits[i].hash && c.parents.join() === commits[i].parents.join());
-        this.root = root; this.on = on; this.status = status; this.stash = stash.code === 0 ? stash.stdout.split("\n").filter(Boolean).length : 0;
+        this.repo = repo; this.root = repo.root ?? repo.commonDir; this.on = on;
+        this.status = status; this.refs = refs; this.op = op;
+        this.head = status ? { branch: status.branch, oid: status.oid } : head;
         this.error = null; this.loaded = true;
         if (!sameHistory) {
           this.graph = layout(commits);
           const L = this.graph.cols <= 8 ? 14 : this.graph.cols <= 16 ? 12 : 10;
           this.lane = L; this.graphWidth = this.graph.cols * L + 12;
-        } else commits.forEach((c, i) => { c.row = this.commits[i].row; });
+        }
         this.commits = commits;
         this.commits.forEach((c, i) => { c.row = this.graph.rows[i]; });
         if (this.sel && !commits.some((c) => c.hash === this.sel)) { this.sel = null; this.detail = null; }
-        this.watch(root, cx);
+        this.watch(repo, cx);
       } catch (e) { if (key() === context) this.error = String(e.message ?? e); }
       finally {
         this.loading = false; cx.notify();
-        if (this.again) { this.again = false; this.refresh(cx); }
+        if (this.again) { const l = this.again; this.again = null; this.refresh(cx, l); }
       }
     });
   }
@@ -261,10 +282,8 @@ export default class Git extends View {
     const commit = this.commits.find((c) => c.hash === hash);
     if (!commit || commit.wip) { this.detail = commit ? { hash, wip: true } : null; cx.notify(); return; }
     this.detail = { hash, loading: true };
-    const root = this.root, on = this.on;
+    const { git } = this.runners(this.repo, this.on);
     cx.spawn(async (cx) => {
-      /** @param {string[]} args */
-      const git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
       const [body, files] = await Promise.all([
         git(["show", "-s", "--format=%B%x1f%ad%x1f%cn", "--date=format:%a %d %b %Y · %H:%M", hash]),
         git(["show", "--numstat", "--format=", "--diff-merges=first-parent", "-z", "--no-renames", hash]),
@@ -311,25 +330,69 @@ export default class Git extends View {
    * @returns {Element}
    */
   header(t) {
-    const s = this.status, name = this.root ? this.root.split("/").pop() : "Git";
-    const branch = s ? (s.branch ?? (s.oid ? `detached @ ${s.oid.slice(0, 7)}` : "no commits yet")) : null;
+    const s = this.status, h = this.head, repo = this.repo;
+    const name = repo ? repoName(repo.kind === "bare" ? repo.commonDir : repo.root) : "Git";
+    const branch = repo ? (h.branch ?? (h.oid ? `detached @ ${h.oid.slice(0, 7)}` : "no commits yet")) : null;
+    const kind = repo?.kind === "linked" ? "worktree" : repo?.kind === "main" ? null : repo?.kind;
+    const stashes = this.refs.stashes.length;
     return h_flex().h(52).flex_none().px(16).gap(10).items_center()
       .child(div().size(28).flex_none().rounded(8).flex().items_center().justify_center()
         .bg(alpha(t.accent, "22")).border_1().border_color(alpha(t.accent, "44"))
         .child(svg(ICON("branch")).size(15).text_color(t.accent)))
       .child(v_flex().min_w(0).gap(1)
-        .child(div().text_size(14).font_semibold().truncate().child(name))
+        .child(h_flex().gap(6).items_center().min_w(0)
+          .child(div().text_size(14).font_semibold().truncate().child(name))
+          .when(Boolean(kind), (e) => e.child(div().flex_none().px(5).h(15).flex().items_center().rounded(4).bg(t.raised).text_size(9.5).font_medium().text_color(t.muted).child(kind))))
         .when(Boolean(branch), (e) => e.child(h_flex().gap(5).items_center().text_size(11).min_w(0)
           .child(div().text_color(t.accent).font_medium().truncate().child(branch))
-          .when(Boolean(s?.upstream), (e) => e.child(div().text_color(t.dim).truncate().child(`⟶ ${s.upstream}`))))))
+          .when(Boolean(s?.upstream), (e) => e.child(div().text_color(t.dim).truncate().child(`⟶ ${s.upstream}`)))
+          .when(!s?.upstream && Boolean(this.refs.tag), (e) => e.child(div().text_color(t.dim).truncate().child(this.refs.tag))))))
       .child(div().flex_1())
       .when(Boolean(s?.ahead), (e) => e.child(this.chip("up", String(s.ahead), t.ansi2, t)))
       .when(Boolean(s?.behind), (e) => e.child(this.chip("down", String(s.behind), t.blocked, t)))
-      .when(this.stash > 0, (e) => e.child(this.chip("stash", String(this.stash), t.ansi5, t)))
+      .when(stashes > 0, (e) => e.child(this.chip("stash", String(stashes), t.ansi5, t)))
       .child(div().id("git-refresh").size(26).flex_none().rounded(7).flex().items_center().justify_center().cursor_pointer()
         .text_color(t.muted).hover((st) => st.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => this.refresh(cx))
         .child(this.loading ? svg(ICON("spinner")).size(14).spin(900) : svg(ICON("refresh")).size(14)));
+  }
+
+  /**
+   * A banner while a rebase, merge, cherry-pick, revert or bisect is in progress.
+   * @param {Theme} t
+   * @returns {Element | null}
+   */
+  opBanner(t) {
+    const op = this.op;
+    if (!op) return null;
+    const conflicts = this.status?.conflicts.length ?? 0;
+    return h_flex().mx(12).mb(8).h(30).px(10).gap(8).flex_none().items_center().rounded(8)
+      .bg(alpha(t.blocked, "1a")).border_1().border_color(alpha(t.blocked, "44")).text_size(11.5)
+      .child(div().size(7).flex_none().rounded_full().bg(t.blocked).loop("opacity", { from: 0.35, to: 1, period: 1400 }))
+      .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground).child(opLabel(op)))
+      .when(op.step != null && op.total != null, (e) => e.child(div().flex_none().text_color(t.blocked).font_medium().child(`${op.step}/${op.total}`)))
+      .when(conflicts > 0, (e) => e.child(div().flex_none().text_color(t.ansi1).child(`${conflicts} conflict${conflicts === 1 ? "" : "s"}`)));
+  }
+
+  /**
+   * A bare repo has no working tree: list its checkouts instead.
+   * @param {Theme} t
+   * @returns {Element | null}
+   */
+  worktreeCard(t) {
+    const wts = this.refs.worktrees.filter((w) => !w.bare);
+    const card = v_flex().mx(12).mb(10).flex_none().rounded(10).bg(t.surface).border_1().border_color(t.border).overflow_hidden();
+    const title = h_flex().h(34).px(12).gap(8).items_center().text_size(12)
+      .child(div().font_semibold().child("Bare repository"))
+      .child(div().px(6).h(17).flex().items_center().rounded(5).bg(t.raised).text_size(10.5).text_color(t.muted)
+        .child(`${wts.length} worktree${wts.length === 1 ? "" : "s"}`));
+    if (!wts.length) return card.child(title);
+    return card.child(title).child(v_flex().border_t(1).border_color(t.border).p(4).children(wts.slice(0, 12).map((w) =>
+      h_flex().h(24).px(10).gap(8).items_center().text_size(12).rounded(6)
+        .child(div().flex_none().text_color(t.accent).font_medium().child(w.branch ?? (w.head ? w.head.slice(0, 7) : "?")))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(base(w.path)))
+        .when((w.dirty ?? 0) > 0, (e) => e.child(div().text_size(10.5).text_color(t.blocked).child(`${w.dirty} changed`)))
+        .when(w.locked, (e) => e.child(div().text_size(10.5).text_color(t.dim).child("locked"))))));
   }
 
   /**
@@ -644,7 +707,8 @@ export default class Git extends View {
         this.loading || !this.error ? this.empty(t, "Reading repository…", "")
           : this.empty(t, this.error, this.error === "Not a git repository" ? `${this.cwd ?? "This folder"} isn't inside a git repo. cd into one in this tab's terminal.` : "")));
     }
-    const card = this.statusCard(t), details = this.details(t);
-    return root.child(this.header(t)).when(Boolean(card), (e) => e.child(card)).child(this.history(t)).when(Boolean(details), (e) => e.child(details));
+    const banner = this.opBanner(t), card = this.repo?.kind === "bare" ? this.worktreeCard(t) : this.statusCard(t), details = this.details(t);
+    return root.child(this.header(t)).when(Boolean(banner), (e) => e.child(banner)).when(Boolean(card), (e) => e.child(card))
+      .child(this.history(t)).when(Boolean(details), (e) => e.child(details));
   }
 }
