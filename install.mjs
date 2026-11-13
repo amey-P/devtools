@@ -183,8 +183,8 @@ function mirror(src, dst, patterns) {
 const SPEC = {
   git: {
     mods: [{ name: "git", src: "herdr-git", exclude: ["sync.sh", "test"] }],
-    // The git view used to open as a split pane; it's now a drawer in the minimal layout, and this
-    // key opens it as a window elsewhere. Only the old pane binding is migrated.
+    // The git view used to open as a split pane; it's now a section of the minimal layout's
+    // sidebar, and this key opens the full view (with the graph) as a window. Only the old pane binding is migrated.
     bindings: [{ key: "ctrl-shift-g", cmd: { command: "mod.open", args: { name: "git" } },
       replace: { command: "pane.split", args: { direction: "right", mod: "git" } } }],
   },

@@ -4,7 +4,7 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 
 | Project | Installs | Into `$HERDR_APP_HOME` |
 |---|---|---|
-| `herdr-git/` | Git drawer on the minimal layout's sidebar edge (ctrl-shift-g opens it as a window elsewhere; see below) | `mods/git` |
+| `herdr-git/` | Git section in the minimal layout's sidebar, plus a full commit-graph window on ctrl-shift-g (see below) | `mods/git` |
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
@@ -50,11 +50,11 @@ The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a c
 | `HERDR_DEVTOOLS_REPO` | `https://github.com/amey-P/devtools.git` | Git URL the bootstrap clones from |
 | `HERDR_DEVTOOLS_DIR` | `~/.local/share/herdr-devtools` | Where the bootstrap clones to |
 
-## Git drawer
+## Git in the sidebar
 
-`herdr-git` is a drawer that floats on the left edge of the work area, next to the sidebar (the minimal layout's `work-body` node has it as a `floating` block with `peek`). While closed, a 40 px strip shows the branch with a clean/dirty/conflict dot, the number of changed files, ahead/behind, a rebase/merge/cherry-pick/revert/bisect in progress (with its step), the worktree count and stashes. Hovering slides out the rest: the working tree, branches (ahead/behind, which worktree has each checked out), worktrees (click to open or switch to their space), stashes, the commit graph and commit details. The history loads the first time it opens.
+`herdr-git` is a section at the bottom of the minimal layout's sidebar, above the usage widget (the sidebar's `git` block). Closed, it is one row: the branch with a clean/dirty/conflict dot, a rebase/merge/cherry-pick/revert/bisect in progress (with its step), the number of changed files and ahead/behind. Clicking it opens the block (Herdr keeps the size, so it stays open across restarts) to show the working tree, branches (ahead/behind, which worktree has each checked out), worktrees (click to open or switch to their space) and stashes. The commit graph and commit details are too wide for the sidebar: the graph button, or ctrl-shift-g, opens the full view as a window. On the narrow icon rail the row shrinks to the branch glyph, and a click opens that window.
 
-It follows the focused terminal's repo, falling back to the tab's other terminals and the space's folder. It handles ordinary checkouts, linked worktrees, submodules, a folder inside `.git` and bare repos (including the `.bare` + worktrees layout), on this machine or a space's. Locally it watches the work tree and both git dirs, so commits made in any worktree show up at once. Other layouts open the same view as a window with ctrl-shift-g (`./install.sh install git` rebinds the old split-pane key; anything else bound there is left alone). `node --test herdr-git/test` runs its unit tests.
+It follows the focused terminal's repo, falling back to the tab's other terminals and the space's folder. It handles ordinary checkouts, linked worktrees, submodules, a folder inside `.git` and bare repos (including the `.bare` + worktrees layout), on this machine or a space's. Locally it watches the work tree and both git dirs, so commits made in any worktree show up at once. ctrl-shift-g opens the full view in any layout (`./install.sh install git` rebinds the old split-pane key; anything else bound there is left alone). `node --test herdr-git/test` runs its unit tests.
 
 ## Agent usage widget
 

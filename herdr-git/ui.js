@@ -1,4 +1,4 @@
-// Small drawing helpers shared by the full view (main.js) and the drawer (drawer.js).
+// Small drawing helpers shared by the full view (main.js) and the sidebar section (sidebar.js).
 
 /** @import { Theme } from "./types" */
 /** @import { Color } from "gpui-kit" */

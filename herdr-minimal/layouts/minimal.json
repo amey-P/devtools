@@ -39,6 +39,20 @@
           }
         },
         {
+          "id": "git",
+          "type": "block",
+          "size": {
+            "px": 36
+          },
+          "content": {
+            "mod": "git",
+            "props": {
+              "sidebar": true,
+              "block": "git"
+            }
+          }
+        },
+        {
           "id": "usage",
           "type": "block",
           "size": {
@@ -83,20 +97,6 @@
                   }
                 }
               }
-            }
-          ],
-          "floating": [
-            {
-              "id": "git-drawer",
-              "content": {
-                "mod": "git",
-                "props": {
-                  "drawer": true
-                }
-              },
-              "edge": "left",
-              "align": "start",
-              "peek": 40
             }
           ]
         }
