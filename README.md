@@ -8,7 +8,8 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
-| `herdr-review/` | Review mod and inbox, plus a Claude Code plugin and a pi extension | `mods/review`, `mods/review-inbox` (see [its README](herdr-review/README.md)) |
+| `herdr-review/` | Review mod, inbox and settings | `mods/review`, `mods/review-inbox`, `mods/review-settings` (see [its README](herdr-review/README.md)) |
+| *agents* (opt-in) | The coding-agent integrations: herdr-review's Claude Code plugin (hooks, skills) and pi extension | Claude Code's `herdr-local` marketplace, pi's settings |
 
 `HERDR_APP_HOME` defaults to `~/.config/herdr-app`.
 
@@ -22,6 +23,8 @@ git clone https://github.com/amey-P/devtools.git herdr-app && cd herdr-app
 ./install.sh uninstall [target]
 ```
 
+**Agent integrations are opt-in.** `install` never touches Claude Code or pi configuration on its own. Opt in with `./install.sh install agents` (both, where `claude` / `pi` is on PATH) or `./install.sh install agents claude|pi`. After that, `./install.sh install` keeps the opted-in ones current, and `status` checks them (the rest show as "not opted in" and don't affect the exit code). `./install.sh uninstall agents [claude|pi]` opts out. Being installed is what counts as opted in, so there's no state file.
+
 You can also skip the clone:
 
 ```sh
@@ -31,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | b
 
 The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a clone already exists, and then runs that copy's `install.sh`.
 
-**Requirements:** `bash`, `rsync`, `git` (for the bootstrap). The `review` and `usage` targets also need Node.js 18+. When a tool is missing, the script prints the install command for your OS (brew, apt, dnf, pacman, apk or zypper). The `review` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
+**Requirements:** `bash`, `rsync`, `git` (for the bootstrap). The `review` and `usage` targets also need Node.js 18+. When a tool is missing, the script prints the install command for your OS (brew, apt, dnf, pacman, apk or zypper). The `agents` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
 
 | Variable | Default | |
 |---|---|---|
