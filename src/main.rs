@@ -8,6 +8,7 @@
 
 mod format;
 mod hc;
+mod placement;
 mod roles;
 mod server;
 

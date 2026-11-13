@@ -199,6 +199,28 @@ pub fn tail(text: &str, max_lines: usize, max_bytes: usize) -> (String, bool) {
     (out, truncated)
 }
 
+/// Pane id showing terminal `addr`, from `herdr-app ls` (spaces > tabs > terminals).
+pub fn pane_of(ls: &Value, addr: &str) -> Option<String> {
+    let arr = |v: &Value, k: &str| v.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+    arr(ls, "spaces")
+        .iter()
+        .flat_map(|s| arr(s, "tabs"))
+        .flat_map(|t| arr(&t, "terminals"))
+        .find(|t| t.get("terminal").and_then(Value::as_str) == Some(addr))
+        .and_then(|t| t.get("pane").and_then(Value::as_str).map(String::from))
+}
+
+/// The tab showing terminal `addr` in a pane: (tab id, [(terminal, pane)] of that tab's panes in order).
+pub fn tab_panes(ls: &Value, addr: &str) -> Option<(String, Vec<(String, String)>)> {
+    let arr = |v: &Value, k: &str| v.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
+    let tab = arr(ls, "spaces").iter().flat_map(|sp| arr(sp, "tabs")).find(|t| {
+        arr(t, "terminals").iter().any(|x| s(x, "terminal").as_deref() == Some(addr) && s(x, "pane").is_some())
+    })?;
+    let panes = arr(&tab, "terminals").iter().filter_map(|x| Some((s(x, "terminal")?, s(x, "pane")?))).collect();
+    Some((s(&tab, "id")?, panes))
+}
+
 pub fn parse_hc_error(stderr: &str) -> Option<HcError> {
     for line in stderr.split('\n').rev() {
         let t = line.trim();
@@ -225,6 +247,27 @@ pub fn parse_hc_error(stderr: &str) -> Option<HcError> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pane_of_walks_spaces_and_tabs() {
+        let ls = json!({"spaces":[{"tabs":[{"terminals":[{"terminal":"t1","pane":"p0"}]},
+            {"terminals":[{"terminal":"t2","pane":null},{"terminal":"t3f","pane":"p1"}]}]}]});
+        assert_eq!(pane_of(&ls, "t3f").as_deref(), Some("p1"));
+        assert_eq!(pane_of(&ls, "t1").as_deref(), Some("p0"));
+        assert_eq!(pane_of(&ls, "t2"), None);
+        assert_eq!(pane_of(&ls, "t9"), None);
+        assert_eq!(pane_of(&json!({}), "t1"), None);
+    }
+
+    #[test]
+    fn tab_panes_finds_the_shown_tab() {
+        let ls = json!({"spaces":[{"tabs":[{"id":"tb0","terminals":[{"terminal":"t1","pane":null}]},
+            {"id":"tb1","terminals":[{"terminal":"t2","pane":"p2"},{"terminal":"t1","pane":"p1"},{"terminal":"t4","pane":null}]}]}]});
+        let (tab, panes) = tab_panes(&ls, "t1").unwrap();
+        assert_eq!(tab, "tb1");
+        assert_eq!(panes, [("t2".to_string(), "p2".to_string()), ("t1".into(), "p1".into())]);
+        assert_eq!(tab_panes(&ls, "t4"), None);
+    }
 
     fn names() -> HashMap<String, String> {
         HashMap::from([("t3f".to_string(), "scout".to_string())])

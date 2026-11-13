@@ -5,6 +5,9 @@
 #   FAKE_HC_ERR=blocked   send fails with hc's blocked error (exit 9)
 #   FAKE_HC_SLOW=N        wait sleeps N seconds (pid written to FAKE_HC_PIDFILE)
 #   FAKE_HC_UNDELIVERED   run reports first_message.sent=false
+#   FAKE_HC_LABELS        get t1 reports herdr.space/herdr.tab labels
+#   FAKE_HC_NOT_READY     wait on one terminal reports blocked
+#   FAKE_HC_SMALL         get reports panes too small to split
 
 if [ -n "$FAKE_HC_LOG" ]; then
 	{ for a in "$@"; do printf '%s|' "$a"; done; echo; } >>"$FAKE_HC_LOG"
@@ -40,6 +43,14 @@ send)
 	esac
 	;;
 wait)
+	if [ "$3" != "--children" ] && [ -n "$3" ]; then
+		if [ -n "$FAKE_HC_NOT_READY" ]; then
+			echo "{\"terminal\":\"$3\",\"reason\":\"status\",\"status\":\"blocked\",\"ended\":true}"
+		else
+			echo "{\"terminal\":\"$3\",\"reason\":\"status\",\"status\":\"idle\",\"ended\":true}"
+		fi
+		exit 0
+	fi
 	if [ -n "$FAKE_HC_SLOW" ]; then
 		[ -n "$FAKE_HC_PIDFILE" ] && echo $$ >"$FAKE_HC_PIDFILE"
 		exec sleep "$FAKE_HC_SLOW"
@@ -55,7 +66,17 @@ kill)
 	exit 11
 	;;
 rm) echo '{"removed":"t3f"}' ;;
-get) echo '{"address":"t3f","parent":"t1","template":"scout","status":{"app":"pi","state":"working"}}' ;;
+get)
+	if [ -n "$FAKE_HC_SMALL" ]; then size='"cols":100,"rows":15'; elif [ "$3" = t1 ]; then size='"cols":160,"rows":40'; else size='"cols":80,"rows":40'; fi
+	if [ "$3" = t1 ] && [ -n "$FAKE_HC_LABELS" ]; then
+		echo '{"address":"t1","parent":null,'"$size"',"labels":{"herdr.space":"sp1","herdr.tab":"tb1","where":"~ / 1"}}'
+	elif [ "$3" = t1 ]; then
+		echo '{"address":"t1","parent":null,'"$size"',"labels":{}}'
+	else
+		echo '{"address":"t3f","parent":"t1",'"$size"',"template":"scout","status":{"app":"pi","state":"working"}}'
+	fi
+	;;
+label) echo "{\"address\":\"$3\",\"labels\":{}}" ;;
 *)
 	echo "{\"error\":{\"kind\":\"usage\",\"message\":\"unknown $cmd\"}}" >&2
 	exit 2
