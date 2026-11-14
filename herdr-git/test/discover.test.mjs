@@ -117,3 +117,78 @@ test("discover against fixture repos", { skip: !FX && "set HERDR_GIT_FIXTURES" }
   const r = await discover(`${FX}/normal/.git/worktrees/normal-linked`, git, read);
   assert.equal(r?.kind, "linked");
 });
+
+test("tip: last commit subject and time", async () => {
+  const { parseTip } = await import("../load.js");
+  assert.deepEqual(parseTip("fix: the thing\x1f1700000000\n"), { subject: "fix: the thing", at: 1700000000 });
+  assert.equal(parseTip(""), null);
+});
+
+test("pulse: what lights the strip up", async () => {
+  const { substantial, snapshot } = await import("../pulse.js");
+  const base = { gitDir: "/r/.git", branch: "main", oid: "a", op: null, conflicts: 0, dirty: 0, ahead: 0, behind: 0 };
+  const at = (/** @type {object} */ o) => ({ ...base, ...o });
+  assert.equal(substantial(base, base), null);
+  assert.equal(substantial(base, at({ gitDir: "/s/.git" })), "switch");
+  assert.equal(substantial(base, at({ branch: "dev" })), "switch");
+  assert.equal(substantial(base, at({ op: "rebase" })), "alert");
+  assert.equal(substantial(base, at({ conflicts: 1, dirty: 1 })), "alert");
+  assert.equal(substantial(base, at({ oid: "b" })), "commit");
+  assert.equal(substantial(base, at({ ahead: 1 })), "sync");
+  assert.equal(substantial(base, at({ dirty: 1 })), "change");          // clean → dirty
+  assert.equal(substantial(at({ dirty: 2 }), at({ dirty: 3 })), null);  // one more file saved
+  assert.equal(substantial(at({ dirty: 2 }), at({ dirty: 7 })), "change");
+  const s = snapshot({ repo: { gitDir: "/r/.git" }, head: { branch: "main", oid: "a" }, op: null,
+    status: { conflicts: [], staged: [1], modified: [1, 2], untracked: [], ahead: 2, behind: 0 } });
+  assert.equal(s.dirty, 3); assert.equal(s.ahead, 2);
+});
+
+test("sidebar extras: describe, recent, day buckets, remote names", async () => {
+  const { parseDescribe, parseRecent, bucketDays } = await import("../load.js");
+  const { shortRemote } = await import("../paths.js");
+  assert.deepEqual(parseDescribe("v1.2-5-gabc1234\n"), { tag: "v1.2", since: 5 });
+  assert.deepEqual(parseDescribe("release-2024-01-0-g0f0f0f0"), { tag: "release-2024-01", since: 0 });
+  assert.equal(parseDescribe("fatal: no names found"), null);
+
+  const rec = parseRecent("abc1234\x1fAda\x1fada@x\x1f1700000000\x1ffix: a thing\ndef5678\x1fBo\x1f\x1f0\x1f\n");
+  assert.equal(rec.length, 2);
+  assert.deepEqual(rec[0], { hash: "abc1234", author: "Ada", email: "ada@x", at: 1700000000, subject: "fix: a thing", unpushed: false });
+  assert.equal(rec[1].subject, "");
+
+  const noon = new Date(2026, 10, 14, 12).getTime() / 1000;
+  const days = bucketDays([noon, noon - 3600, noon - 86400, noon - 13 * 86400, noon - 20 * 86400], noon, 14);
+  assert.equal(days.length, 14);
+  assert.equal(days[13], 2);
+  assert.equal(days[12], 1);
+  assert.equal(days[0], 1);
+  assert.equal(days.reduce((a, b) => a + b, 0), 4);
+
+  assert.equal(shortRemote("git@github.com:o/r.git"), "github.com/o/r");
+  assert.equal(shortRemote("https://user@github.com/o/r/"), "github.com/o/r");
+  assert.equal(shortRemote("ssh://git@host.xz:2222/o/r.git"), "host.xz/o/r");
+  assert.equal(shortRemote("/srv/git/thing.git"), "thing");
+  assert.equal(shortRemote("C:/repos/thing"), "thing");
+});
+
+test("changeTotals sums staged, modified and conflicted lines; untracked and binaries add nothing", async () => {
+  const { changeTotals } = await import("../load.js");
+  assert.deepEqual(changeTotals(null), { add: 0, del: 0 });
+  const s = { branch: "main", oid: "a", upstream: null, ahead: 0, behind: 0,
+    staged: [{ path: "a", code: "M", add: 3, del: 1 }],
+    modified: [{ path: "b", code: "M", add: 2, del: 5 }, { path: "img", code: "M", binary: true }],
+    untracked: [{ path: "c", code: "?" }],
+    conflicts: [{ path: "d", code: "U", add: 1, del: 0 }] };
+  assert.deepEqual(changeTotals(s), { add: 6, del: 6 });
+});
+
+test("compact keeps counts to four characters", async () => {
+  const { compact } = await import("../ui.js");
+  assert.equal(compact(0), "0");
+  assert.equal(compact(999), "999");
+  assert.equal(compact(1000), "1k");
+  assert.equal(compact(1234), "1.2k");
+  assert.equal(compact(1299), "1.2k");
+  assert.equal(compact(12345), "12k");
+  assert.equal(compact(999999), "999k");
+  assert.equal(compact(2500000), "2.5m");
+});

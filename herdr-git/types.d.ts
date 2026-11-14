@@ -190,4 +190,30 @@ export interface RefsState {
   remotes: Record<string, string>;
   /** Latest reachable tag. */
   tag: string | null;
+  /** Commits HEAD is past that tag. */
+  tagSince: number;
+}
+
+/** A commit in the sidebar's short lists (parseRecent()). */
+export interface RecentCommit {
+  hash: string;
+  author: string;
+  email: string;
+  /** Committer time, seconds. */
+  at: number;
+  subject: string;
+  /** Not on the upstream yet. */
+  unpushed: boolean;
+}
+
+/** loadInsight(): what the sidebar shows beyond the status. */
+export interface Insight {
+  /** HEAD's latest commits, newest first. */
+  recent: RecentCommit[];
+  /** Upstream commits HEAD doesn't have, newest first. */
+  incoming: RecentCommit[];
+  /** Commits per day for the last 14 days, oldest first (the last is today). */
+  activity: number[];
+  /** Commits reachable from HEAD. */
+  total: number;
 }

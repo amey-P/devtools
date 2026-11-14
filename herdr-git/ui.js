@@ -38,5 +38,14 @@ export function ago(sec) {
   return `${Math.floor(d / (86400 * 365))}y`;
 }
 
+/** A count in at most four characters: 999, 1.2k, 12k, 1.2m. @param {number} n @returns {string} */
+export function compact(n) {
+  const a = Math.abs(n);
+  if (a < 1000) return String(n);
+  /** @param {number} v @param {string} u */
+  const f = (v, u) => (v < 10 ? (Math.floor(v * 10) / 10).toString() : String(Math.floor(v))) + u;
+  return (n < 0 ? "-" : "") + (a < 1e6 ? f(a / 1e3, "k") : f(a / 1e6, "m"));
+}
+
 /** @param {number} n @param {string} word @returns {string} */
 export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;

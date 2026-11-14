@@ -5,22 +5,23 @@
 // submodules and bare repos, locally or on a space's machine.
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { spaces, panes, focused, props, run, appHome, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
+import { spaces, panes, focused, props, run, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 import { discoverFirst } from "./discover.js";
-import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadRefs, loadOperation, loadLog, classifyChange, dirtyCount } from "./load.js";
+import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadTip, loadRefs, loadOperation, loadLog, loadInsight, classifyChange, dirtyCount } from "./load.js";
 import { norm, base, repoName, samePath } from "./paths.js";
 import { ICON, alpha, palette, hashOf, initials, ago } from "./ui.js";
-import { sidebar, naturalHeight, windowHeight, CLOSED } from "./sidebar.js";
-import { join } from "./paths.js";
+import { sidebar } from "./sidebar.js";
+import { snapshot, substantial } from "./pulse.js";
 
-/** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult } from "./types" */
+/** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult, Insight } from "./types" */
+/** @import { Snapshot, Pulse } from "./pulse.js" */
 /** @import { AsyncContext, Color, Context, Element } from "gpui-kit" */
 /** @import { Props } from "gpui-shell" */
 
 const US = "\x1f";
 /** @type {RefsState} */
-const NO_REFS = { branches: [], worktrees: [], stashes: [], remotes: {}, tag: null };
+const NO_REFS = { branches: [], worktrees: [], stashes: [], remotes: {}, tag: null, tagSince: 0 };
 
 /**
  * Folders to look for a repo in, best first, and the machine to run git on.
@@ -62,22 +63,30 @@ export default class Git extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
     this.scroll = VirtualListScrollHandle.new();
-    this.size = inSidebar() ? { width: 248, height: CLOSED } : { width: 600, height: 800 };
+    this.size = inSidebar() ? { width: 248, height: 320 } : { width: 600, height: 800 };
     this.all = true;
     /** @type {Record<string, boolean>} */
     this.folded = {};
     try { this.folded = JSON.parse(localStorage.getItem("folded") ?? "{}") ?? {}; } catch { /* storage unavailable */ }
     // The sidebar section never shows history, so it never loads the log.
     this.awake = !inSidebar();
-    this.winH = windowHeight(null, undefined);
     this.statusH = 0;
-    /** The height last asked of the sidebar block, while open. @type {number | null} */
-    this.asked = null;
-    this.closing = false;
-    this.measured = false;
-    cx.spawn(async () => {
-      try { this.winH = windowHeight(await readTextFile(join(appHome(), "window.json")), Number(settings().zoom) || 1); } catch { /* keep the default */ }
-    });
+    /** The sidebar body is open; remembered per copy. */
+    this.open = false;
+    try { this.open = localStorage.getItem("open") === "1"; } catch { /* storage unavailable */ }
+    /** The body is drawn (open, or still easing shut). */
+    this.bodyShown = this.open;
+    /** The strip's glow: its kind (kept while it fades) and whether it is lit. @type {Pulse | null} */
+    this.glowKind = null;
+    this.glowOn = false;
+    this.glowGen = 0;
+    /** A workspace switch is loading: the strip's lines dim until it lands. */
+    this.switching = false;
+    /** What the strip showed after the last settled refresh. @type {Snapshot | null} */
+    this.lastSnap = null;
+    // The block used to grow with layout.resize, and Herdr saved that size.
+    // It now shares the sidebar by weight: clear any saved px.
+    if (inSidebar() && props()?.block) run("layout.resize", { id: props().block, weight: 1 });
     /** @type {"status" | "all" | null} */
     this.pending = null;
     this.reset();
@@ -113,20 +122,27 @@ export default class Git extends View {
   statusCardHeight() { return this.statusH; }
 
   /**
-   * Opens or closes the sidebar block. Herdr saves the size with the layout,
-   * so the section comes back the way it was left.
-   * @param {boolean} open whether it is open now
+   * Opens or closes the sidebar body (it eases in place; the block's size never changes).
+   * @param {Context} cx
    */
-  toggleSidebar(open) {
-    this.asked = open ? null : this.sidebarTarget();
-    // Until the block has shrunk, render must not mistake it for open and grow it back.
-    this.closing = open;
-    run("layout.resize", { id: props()?.block ?? "git", px: this.asked ?? CLOSED });
+  toggleOpen(cx) {
+    this.open = !this.open;
+    try { localStorage.setItem("open", this.open ? "1" : "0"); } catch { /* storage unavailable */ }
+    if (this.open) this.bodyShown = true;
+    else cx.timer.after(320, (cx) => { if (!this.open) { this.bodyShown = false; cx.notify(); } });
+    cx.notify();
   }
 
-  /** How tall the open section should be: its content, within 45% of the window. */
-  sidebarTarget() {
-    return Math.round(Math.max(140, Math.min(naturalHeight(this, theme()), this.winH * 0.45)));
+  /**
+   * Lights the strip up in a pulse's color, then lets it fade.
+   * @param {Pulse} kind
+   * @param {Context} cx
+   */
+  flash(kind, cx) {
+    this.glowKind = kind; this.glowOn = true;
+    const gen = ++this.glowGen;
+    cx.timer.after(kind === "switch" ? 600 : 800, (cx) => { if (this.glowGen === gen) { this.glowOn = false; cx.notify(); } });
+    cx.notify();
   }
 
   /** The commit details panel's height. */
@@ -154,6 +170,10 @@ export default class Git extends View {
     this.commits = /** @type {Commit[]} */ ([]);
     this.graph = null;
     this.sel = null; this.detail = null; this.loaded = false;
+    /** @type {{ subject: string, at: number } | null} */
+    this.tip = null;
+    /** @type {Insight | null} */
+    this.insight = null;
     /** @type {string[]} */
     this.watched = this.watched ?? [];
     this.unwatch();
@@ -230,8 +250,12 @@ export default class Git extends View {
   refresh(cx, level = "all") {
     if (this.loading) { this.again = this.again === "all" || level === "all" ? "all" : "status"; return; }
     const { candidates, on } = location(), context = key();
-    if (context !== this.context) { this.context = context; level = "all"; }
-    if (!candidates.length) { this.reset(); this.error = "No folder"; return; }
+    if (context !== this.context) {
+      // Not on the first load: that's the view appearing, not the workspace changing.
+      if (this.context !== undefined) this.switching = true;
+      this.context = context; level = "all";
+    }
+    if (!candidates.length) { this.reset(); this.error = "No folder"; this.switching = false; return; }
     if (!this.repo) level = "all";
     this.loading = true;
     cx.spawn(async (cx) => {
@@ -260,16 +284,19 @@ export default class Git extends View {
           return;
         }
 
-        const [status, refs, op, head] = await Promise.all([
+        const [status, refs, op, head, tip] = await Promise.all([
           loadStatus(repo, git), loadRefs(repo, git, gitAt).catch(() => NO_REFS), loadOperation(repo, read), repo.root ? null : loadHead(git),
+          loadTip(git).catch(/** @returns {null} */ () => null),
         ]);
         const oid = status ? status.oid : head?.oid ?? null;
+        // The sidebar's extras; the window doesn't draw them.
+        const insight = inSidebar() && oid ? await loadInsight(git, status) : null;
         const commits = this.awake ? await loadLog(repo, git, { all: this.all, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) }) : [];
         if (key() !== context) return;
 
         const sameHistory = this.graph && this.commits.length === commits.length && this.commits.every((c, i) => c.hash === commits[i].hash && c.parents.join() === commits[i].parents.join());
         this.repo = repo; this.root = repo.root ?? repo.commonDir; this.on = on;
-        this.status = status; this.refs = refs; this.op = op;
+        this.status = status; this.refs = refs; this.op = op; this.tip = tip; this.insight = insight;
         this.head = status ? { branch: status.branch, oid: status.oid } : head;
         this.error = null; this.loaded = true;
         if (!sameHistory) {
@@ -284,9 +311,22 @@ export default class Git extends View {
       } catch (e) { if (key() === context) this.error = String(e.message ?? e); }
       finally {
         this.loading = false; cx.notify();
+        // Settled (no follow-up queued, still the same place): glow if it changed enough.
+        if (!this.again && key() === context) this.settle(cx);
         if (this.again) { const l = this.again; this.again = null; this.refresh(cx, l); }
       }
     });
+  }
+
+  /**
+   * After a refresh lands: ends a switch, and compares with what was shown before.
+   * @param {Context} cx
+   */
+  settle(cx) {
+    const now = snapshot(this), before = this.lastSnap;
+    const kind = this.switching ? "switch" : before ? substantial(before, now) : null;
+    this.lastSnap = now; this.switching = false;
+    if (kind && inSidebar()) this.flash(kind, cx);
   }
 
   /**
@@ -713,7 +753,7 @@ export default class Git extends View {
     const t = theme();
     const root = v_flex().id("git").size_full().min_h(0).relative().bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.handle)
-      .on_size_change((size, cx) => { this.size = size; this.measured = true; cx.notify(); })
+      .on_size_change((size, cx) => { this.size = size; cx.notify(); })
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "down" || k === "j") this.move(1, cx);
@@ -724,19 +764,7 @@ export default class Git extends View {
         else return;
         cx.stop_propagation();
       });
-    if (inSidebar()) {
-      // Open: follow the content as it changes, but only by more than a row, so
-      // the saved layout isn't rewritten on every refresh.
-      // Before the first measurement this.size is a guess: never resize from it.
-      if (!this.measured) { /* wait */ }
-      else if (this.size.height <= CLOSED + 4) this.closing = false;
-      else if (!this.closing && this.size.width >= 160) {
-        const want = this.sidebarTarget();
-        if (this.asked == null) this.asked = this.size.height;
-        if (Math.abs(want - this.asked) > 24) { this.asked = want; run("layout.resize", { id: props()?.block ?? "git", px: want }); }
-      }
-      return root.bg(t.chrome).child(sidebar(this, t));
-    }
+    if (inSidebar()) return root.bg(t.chrome).child(sidebar(this, t));
     if (!this.root) {
       return root.child(this.header(t)).child(div().flex_1().relative().child(
         this.loading || !this.error ? this.empty(t, "Reading repository…", "")

@@ -117,3 +117,18 @@ export function tilde(p, home) {
   const s = norm(p), h = norm(home);
   return h && within(s, h) ? "~" + s.slice(h.length) : s;
 }
+
+/**
+ * A remote URL as host/owner/repo: "git@github.com:o/r.git" and
+ * "https://user@github.com/o/r" → "github.com/o/r". Local paths stay as their last folder.
+ * @param {string} url
+ * @returns {string}
+ */
+export function shortRemote(url) {
+  const u = url.trim().replace(/\.git\/?$/, "").replace(/\/+$/, "");
+  const scp = /^(?:[^@/]+@)?([^:/]+):(?!\/)(.+)$/.exec(u);
+  if (scp && !/^[A-Za-z]$/.test(scp[1])) return `${scp[1]}/${scp[2]}`;
+  const web = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(u);
+  if (web) return `${web[1]}/${web[2]}`;
+  return base(u) || u;
+}
