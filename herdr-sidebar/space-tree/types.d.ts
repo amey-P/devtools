@@ -5,8 +5,10 @@
 export interface IconOverride {
   /** An index into GLYPHS, or a glyph name. */
   glyph?: number | string;
-  /** An index into COLORS, a theme color name, or "#rrggbb". */
-  color?: number | string;
+  /** Generate the geometric icon from this string instead of the space name. */
+  seed?: string;
+  /** Force a geometric family (geo.js FAMILIES). */
+  family?: string;
 }
 
 /** overrides.json: lowercase space name → its override. Parsed JSON, so entries are unchecked. */
@@ -14,10 +16,12 @@ export type Overrides = Record<string, IconOverride>;
 
 /** What iconFor() returns. */
 export interface Icon {
-  /** An icon name from GLYPHS (icons/<glyph>.svg). */
-  glyph: string;
-  /** A theme color name, or "#rrggbb". */
-  color: string;
+  /** A Lucide icon name from GLYPHS (icons/<glyph>.svg) when overrides pin one; else null (geometric). */
+  glyph: string | null;
+  /** The geometric icon's seed. */
+  seed: string;
+  /** A forced geometric family, if any. */
+  family?: string;
 }
 
 /** theme(): color name → hex color. */
