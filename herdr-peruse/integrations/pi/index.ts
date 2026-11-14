@@ -91,6 +91,7 @@ const FRAMING = [
   "### Phase 0: Prepare",
   "- <Deal with uncommitted changes as planned above. Create <new branch>.>",
   "- Keep .plans/ out of git: if `git check-ignore -q .plans` fails, add .plans/ to .git/info/exclude (local; leave the project's .gitignore alone), unless the project keeps plans in git.",
+  "- Track the phases in beads if `bd` is installed: set it up and create one issue per later phase, as the approval message describes.",
   "- Verify: `git status` shows <new branch>, with nothing uncommitted outside .plans/.",
   "",
   "### Phase 1: <goal>",
@@ -116,7 +117,12 @@ const APPROVED = [
   "- A phase is done when its verification passes. Then commit it with the message the plan gives.",
   "- If the repo no longer matches the plan's \"Starting point\" (new uncommitted changes, a different branch), stop and ask.",
   "- If a check fails and the fix stays inside the phase, fix it. If the fix would change the plan (another approach, files the plan doesn't list, a new decision), stop. Leave no broken commit, and report what failed with options and a recommendation.",
-  "- When every phase is done, write a short handoff to handoff.md in the same folder as {path}, never anywhere else: the commits per phase, what was verified and how, and anything to check by hand. Then call peruse on it with wait=false, so it waits in the user's review inbox until they're free. Finally, open the demo for the user: the app, or a Herdr pane set up to try it."
+  "- Track the phases in beads, so progress survives an interrupted session. If `command -v bd` fails, skip these beads steps and say so once.",
+  "  - Setup, once per repo: if .beads/ is missing, run `bd init --stealth --skip-agents --quiet` then `bd config set dolt.local-only true`. If `git check-ignore -q .beads` still fails, add .beads/ to .git/info/exclude. Never commit .beads/ and never edit the project's .gitignore for it.",
+  "  - In Phase 0, mirror the plan: `bd create \"<plan title>\" -t epic -d \"{path}\" --silent` prints the epic's ID. Then, in order, one `bd create \"Phase N: <goal>\" --parent <epic> --deps <previous phase's ID> --silent` per phase after Phase 0 (the first has no --deps). Write each ID beside its phase heading in {path}.",
+  "  - Each phase: `bd update <id> --claim` before you start it, end its commit message with a `Bead: <id>` trailer, then `bd close <id> --reason \"<short sha>\"`. Close the epic after the last phase.",
+  "  - Resuming: `bd show <epic>` and `bd ready` say which phase is next.",
+  "- When every phase is done, write a short handoff to handoff.md in the same folder as {path}, never anywhere else: the beads epic, the commits per phase with their issue IDs, what was verified and how, and anything to check by hand. Then call peruse on it with wait=false, so it waits in the user's review inbox until they're free. Finally, open the demo for the user: the app, or a Herdr pane set up to try it."
 ].join("\n");
 const PLAN_OFF = "Plan mode is over. You may now edit files and run commands normally.";
 /** Fills {tool} / {path} in a fallback text, as the bridge does for the settings' text. */
