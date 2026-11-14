@@ -7,10 +7,12 @@
 //     status     what's installed, and whether it matches the repo
 //     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 //     uninstall  remove what this repo installed (layouts are left alone)
-//   targets: all (default) | git | minimal | sidebar | usage | review | agents
+//   targets: all (default) | git | minimal | sidebar | usage | review | agents | links
 //   agents is opt-in and never part of `all`: it adds the coding-agent integrations
 //   (the herdr-review Claude Code plugin and pi extension). `install agents [claude|pi]`
 //   opts in; after that, `install` keeps them current. `uninstall agents [claude|pi]` opts out.
+//   links is opt-in too: it symlinks agents/ (pi and Claude statuslines, custom skills) into
+//   ~/.pi, ~/.claude and ~/.agents (see scripts/links.mjs).
 //
 // install.sh (macOS/Linux) and install.ps1 (Windows) bootstrap a clone and run this.
 //
@@ -28,6 +30,7 @@ import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keys } from "./scripts/keys.mjs";
+import { installLinks, statusLinks, uninstallLinks } from "./scripts/links.mjs";
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 const WIN = platform() === "win32";
@@ -265,6 +268,7 @@ function ensureBinding(b) {
 
 /** @param {string} t @param {string[]} agents */
 function installTarget(t, agents) {
+  if (t === "links") { installLinks(say, warn); return; }
   if (t === "review") {
     say("review:");
     relay(review(["install", "herdr"]));
@@ -302,6 +306,7 @@ function show(label, state) {
 
 /** @param {string} t @param {string[]} agents @param {boolean} explicitAgents */
 function statusTarget(t, agents, explicitAgents) {
+  if (t === "links") return statusLinks(show);
   let ok = true;
   if (t === "review" || t === "agents") {
     const list = t === "review" ? ["herdr"] : agents;
@@ -337,6 +342,7 @@ function statusTarget(t, agents, explicitAgents) {
 
 /** @param {string} t @param {string[]} agents */
 function uninstallTarget(t, agents) {
+  if (t === "links") { uninstallLinks(say); return; }
   if (t === "review") {
     say("review:");
     const on = AGENTS.filter(agentOn);
@@ -364,6 +370,7 @@ function watch(targets) {
   /** @type {{ name: string, dirs: string[], sync: () => void, last: string }[]} */
   const jobs = [];
   for (const t of targets) {
+    if (t === "links") { say(c.dim("links are symlinks: edits apply without a sync")); continue; }
     if (t === "agents") { say(c.dim("agents load from their install location; re-run install agents after changes")); continue; }
     if (t === "review") {
       jobs.push({ name: t, dirs: ["mod", "mod-inbox", "mod-settings"].map((d) => join(REPO, "herdr-review", d)), last: "",
@@ -397,7 +404,7 @@ function main() {
   if (major < 18) die(`Node.js 18+ is required (this is ${process.version})`);
   const [cmd = "install", target = "all", agent] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   if (["-h", "--help", "help"].includes(process.argv[2] ?? "")) { usage(); return; }
-  const valid = [...TARGETS, "agents"];
+  const valid = [...TARGETS, "agents", "links"];
   if (target !== "all" && !valid.includes(target)) die(`unknown target '${target}' (all | ${valid.join(" | ")})`);
   if (agent && (target !== "agents" || !AGENTS.includes(agent))) die(`unknown agent '${agent}' (agents ${AGENTS.join(" | ")})`);
   const targets = target === "all" ? TARGETS : [target];
