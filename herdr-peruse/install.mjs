@@ -278,7 +278,8 @@ function migrateKeys() {
   if (renamed !== next) { next = renamed; did.push("review bindings now open peruse"); }
   let keys = null;
   try { keys = JSON.parse(next); } catch {}
-  if (keys && !inboxKeyBound()) {
+  const bound = keys?.global?.[INBOX_KEY]?.command === "mod.open" && keys?.global?.[INBOX_KEY]?.args?.name === "peruse-inbox";
+  if (keys && !bound) {
     if (keys.global?.[INBOX_KEY] !== undefined) log(c.warn(`  keys.json: ${INBOX_KEY} is already bound; bind mod.open {"name": "peruse-inbox"} to another key for the inbox`));
     else if (/"global"\s*:\s*\{/.test(next)) {
       // Insert as text so the file keeps its formatting.

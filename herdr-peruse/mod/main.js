@@ -1,10 +1,12 @@
-// Review: a document, block by block, to annotate and then send to an agent.
+// Peruse: a document, block by block, to read, annotate and then send to an agent (or save beside the file).
 //
-// Kinds (what is reviewed) and modes (how it ends):
+// Kinds (what is shown) and modes (how it ends):
 //   plan   an agent's plan (bin/bridge.mjs, from the Claude hook / pi submit_plan)   decision: Approve / Request changes
-//   ask    an agent ran bin/peruse.mjs                                              decision with --wait, else send
+//   doc    an agent published a document to read (bin/peruse.mjs <file>, pi peruse)  send (Done reading), decision with --wait
+//   ask    an agent sent text to bin/peruse.mjs on stdin                            decision with --wait, else send
 //   choice an agent asks the person to pick (AskUserQuestion, pi ask_user, ask.mjs)  decision: Submit (choice.js)
 //   file   props {kind: "file", file, on?}: a file, live-reloaded (markdown's Review)  send
+//          or `peruse.mjs open <file>` (bridge, target null): to the tab's agent; with none, Save notes → <file>.notes.md
 //   reply  props {kind: "reply"}: the last reply of the agent in this tab (ctrl-shift-r)  send
 // Bridge-made reviews get props {id}; the request lives in <app home>/data/peruse/<id>/ (see bridge.mjs).
 // Placement (bin/config.mjs, <app home>/data/peruse/config.json): a floating window (default), a split or a tab.
@@ -30,7 +32,8 @@
 // being written, both wait.
 // Motion (ui.js Appear/fadeIn): new notes, the editor, the hover toolbar and the result fade in; the sidebar slides;
 // a floating window fades out as it closes.
-// Bindable commands: peruse.submit (⌘Enter's behaviour), .send, .approve, .deny, .general, .sidebar, .refresh, .settings.
+// Bindable commands: peruse.submit (⌘Enter's behaviour), .send, .approve, .deny, .general, .sidebar, .refresh, .settings,
+// .done (Done reading).
 // Settings (⚙ in the header, settings.js): the window, the look (ui.*) and what the agent is told (prompts.*), saved to
 // <app home>/data/peruse/config.json; every open review re-reads it when it changes (watchConfig).
 import { View, div, svg, image } from "gpui-kit";
@@ -52,7 +55,7 @@ import { Settings } from "./settings.js";
 import { Pill } from "./pill.js";
 import { ChoiceForm } from "./choice.js";
 
-const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST", choice: "DECISION" };
+const DOC_LABEL = { plan: "IMPLEMENTATION PLAN", doc: "FOR YOU TO READ", file: "FILE", reply: "AGENT REPLY", ask: "REVIEW REQUEST", choice: "DECISION" };
 const MARKDOWN = /\.(md|mdx|markdown|txt|text)$/i;
 /** The directory part of path `f`. @param {string} f @returns {string} */
 const dirOf = (f) => f.replace(/[\\/][^\\/]*$/, "") || "/";
@@ -170,6 +173,7 @@ export default class Review extends View {
         else if (c === "sidebar") this.toggleSide(cx);
         else if (c === "refresh") this.reloadContent(cx, true);
         else if (c === "settings") this.toggleSettings(cx);
+        else if (c === "done") this.done(cx);
         cx.notify();
       }
     });
@@ -194,10 +198,16 @@ export default class Review extends View {
       if (!req) continue;
       /** Writes the launch meta for the bridge. @param {Record<string, unknown>} m @returns {Promise<void>} */
       const meta = (m) => fs.writeFile(`${spool}/${id}/meta.json`, JSON.stringify(m)).catch(() => {});
+      if (req.opener === "person") {
+        // The person asked for it (peruse.mjs open): open now and take the keyboard. A split / tab: the bridge does it.
+        if (cfg.window.place === "float") await openReviewWindow(id, req, cfg);
+        else await meta({ direct: true, pane: null });
+        continue;
+      }
       if (cfg.window.arrive === "inbox") {
         // Quiet arrival: a toast, and the review waits in the inbox until it's opened.
         const who = AGENT_NAMES[req.agent] ?? AGENT_NAMES[req.parent?.app] ?? "An agent";
-        notify({ title: req.kind === "plan" ? `Plan from ${who}` : req.kind === "choice" ? `Question from ${who}` : `Review request from ${who}`,
+        notify({ title: req.kind === "plan" ? `Plan from ${who}` : req.kind === "choice" ? `Question from ${who}` : req.kind === "doc" ? `Something to read from ${who}` : `Review request from ${who}`,
           body: `${req.title ?? "Review"}: waiting in the review inbox.`, level: "info", action: openInboxAction });
         await meta({ inbox: true, pane: null });
         continue;
@@ -323,6 +333,9 @@ export default class Review extends View {
   /** File content reloads live: file reviews, and send-mode reviews an agent asked for on a file. */
   get liveFile() { return !!this.file && this.mode === "send"; }
 
+  /** Opened by the person (peruse.mjs open, target null): notes go to whichever agent is in the tab, if any. */
+  get openToTab() { return !!this.req && this.req.target === null; }
+
   /** Agents in this pane's tab, the candidates to send to. */
   get tabAgents() {
     const all = agents();
@@ -333,7 +346,7 @@ export default class Review extends View {
   /** The terminal feedback goes to (and, for replies, whose reply this is). */
   get target() {
     if (this.req?.target) return this.req.target;
-    if (this.req?.terminal) return this.req.terminal;
+    if (this.req?.terminal && !this.openToTab) return this.req.terminal;
     const list = this.tabAgents;
     if (this.pickedTarget && list.some((a) => a.address === this.pickedTarget)) return this.pickedTarget;
     return list.find((a) => a.focused)?.address ?? list.sort((a, b) => b.seq - a.seq)[0]?.address ?? null;
@@ -378,6 +391,7 @@ export default class Review extends View {
   get title() {
     if (this.req?.title) return this.req.title;
     if (this.kind === "file") return base(this.file) || "File";
+    if (this.kind === "doc") return base(this.file) || "Document";
     if (this.kind === "reply") return `${this.agentName}'s last reply`;
     return "Review";
   }
@@ -544,7 +558,8 @@ export default class Review extends View {
     }
     const name = this.file ? base(this.file) : this.title;
     const path = this.file ? (this.file.startsWith(home()) ? "~" + this.file.slice(home().length) : this.file) : null;
-    const f = fb?.file ?? { heading: "Feedback on {name}", subject: "`{path}`" };
+    const f = (k === "doc" ? fb?.doc : null) ?? fb?.file
+      ?? (k === "doc" ? { heading: "Notes on {name}", subject: "`{path}`" } : { heading: "Feedback on {name}", subject: "`{path}`" });
     // No file (an ask): the title, in quotes, stands in for the path.
     const vars = { name, path: path ?? this.title };
     const subject = path ? fillText(f.subject, vars) : `"${this.title}"`;
@@ -671,7 +686,7 @@ export default class Review extends View {
 
   /** Writes decision.json, toasts, and starts the floating window's goodbye. Callers: the decision buttons,
  *  the choice form and the dismiss command.
- *  @param {"approve" | "deny" | "dismissed" | "answer"} decision @param {import("gpui-kit").Context} cx
+ *  @param {"approve" | "deny" | "dismissed" | "answer" | "read"} decision @param {import("gpui-kit").Context} cx
  *  @param {{ feedback?: string; notes?: string } | { answers: Record<string, string>; notes?: Record<string, string> }} [extra] */
   async decide(decision, cx, extra = {}) {
     if (this.status !== "open") return;
@@ -689,6 +704,12 @@ export default class Review extends View {
     const who = this.agentName;
     const plan = this.kind === "plan";
     if (decision === "dismissed") { cx.notify(); return; }
+    if (decision === "read") {
+      notify({ title: "Marked as read", body: `${this.title} moved to Resolved in the inbox.`, level: "success", timeout: 2500 });
+      cx.notify();
+      if (this.floating) cx.timer.after(900, () => this.closeWindow());
+      return;
+    }
     if (decision === "answer") {
       notify({ title: "Answer sent", body: `${who} can continue.`, level: "success", timeout: 3000 });
       cx.notify();
@@ -712,7 +733,7 @@ export default class Review extends View {
     if (!this.anns.length) { this.startEdit(null, "general", cx); return; }
     const to = this.target;
     const agent = agents().find((a) => a.address === to);
-    if (!to) { notify({ title: "Peruse", body: "No agent to send to in this tab. Copy the feedback instead.", level: "warning" }); return; }
+    if (!to) { this.saveNotes(cx); return; }
     if (agent?.status === "blocked") {
       notify({ title: "Peruse", body: `${this.agentName} is waiting on a prompt. Answer it first, then send.`, level: "warning" });
       return;
@@ -737,6 +758,47 @@ export default class Review extends View {
       notify({ title: "Feedback sent", body: `${this.agentName} has your ${plural(this.lastSent.count, "note")}.`, level: "success", timeout: 2500 });
       cx.notify();
     });
+  }
+
+  /** No agent to send to: append the notes to <file>.notes.md beside the file (no file: copy them), then start a
+   *  fresh round, as a send does. @param {import("gpui-kit").Context} cx */
+  saveNotes(cx) {
+    if (!this.anns.length || this.sending) return;
+    if (!this.file) { this.copyFeedback(cx); return; }
+    const md = this.feedback;
+    const to = `${this.file}.notes.md`;
+    this.sending = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      let prev = "";
+      try { prev = await fs.readFile(to, "utf8"); } catch {}
+      const stamp = new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+      const entry = `## ${stamp}\n\n${md.trim()}\n`;
+      let err = null;
+      try { await fs.writeFile(to, prev ? `${prev.replace(/\s*$/, "")}\n\n${entry}` : `# Notes on ${base(this.file)}\n\n${entry}`); }
+      catch (e) { err = e?.message ?? String(e); }
+      this.sending = false;
+      if (err) { notify({ title: "Peruse", body: `Could not save the notes: ${err}`, level: "error" }); cx.notify(); return; }
+      this.lastSent = { at: Date.now(), md, to: null, count: this.anns.length, savedTo: to };
+      fs.writeFile(`${this.dir}/sent.json`, JSON.stringify(this.lastSent)).catch(() => {});
+      this.anns = [];
+      this.selected = null;
+      this.saveDraft();
+      notify({ title: "Notes saved", body: `${plural(this.lastSent.count, "note")} added to ${base(to)}.`, level: "success", timeout: 2500 });
+      cx.notify();
+    });
+  }
+
+  /** Done reading: a document with nothing (more) to send is marked read and leaves "Needs you" in the inbox.
+   *  @param {import("gpui-kit").Context} cx */
+  done(cx) {
+    if (this.status !== "open" || this.mode !== "send") return;
+    if (this.editing || this.anns.length) {
+      notify({ title: "Peruse", body: "Send or delete your notes first, then mark it read.", level: "info", timeout: 2500 });
+      return;
+    }
+    if (!this.id) { this.closeWindow(); return; }
+    cx.spawn(async (cx) => this.decide("read", cx));
   }
 
   /** A choice: send the answers once every question has one.
@@ -923,11 +985,11 @@ export default class Review extends View {
       ? (sendMode
         ? (this.sending ? [t.working, "Sending…"]
           : n ? [t.accent, "Ready to send"]
-          : this.lastSent ? [green(t), `Sent ${ago(this.lastSent.at)}${ago(this.lastSent.at) === "just now" ? "" : " ago"}`]
-          : [t.accent, "Annotate, then send"])
+          : this.lastSent ? [green(t), `${this.lastSent.savedTo ? "Saved" : "Sent"} ${ago(this.lastSent.at)}${ago(this.lastSent.at) === "just now" ? "" : " ago"}`]
+          : [t.accent, this.target ? "Annotate, then send" : this.file ? "Annotate, then save" : "Annotate, then copy"])
         : [t.accent, this.req?.created && ago(this.req.created) !== "just now" ? `Waiting ${ago(this.req.created)}` : this.choice ? "Waiting for your answer" : "Awaiting your review"])
-      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"]);
-    const tabAgents = sendMode && !this.id ? this.tabAgents : [];
+      : d === "approve" ? [green(t), "Approved"] : d === "answer" ? [green(t), "Answered"] : d === "read" ? [green(t), "Read"] : d === "deny" ? [t.accent, plan ? "Changes requested" : "Feedback sent"] : [t.dim, "Closed"]);
+    const tabAgents = sendMode && (!this.id || this.openToTab) ? this.tabAgents : [];
     const counts = ["comment", "delete", "replace", "general"].map((k) => [k, this.anns.filter((a) => a.type === k).length]).filter(([, c]) => c);
     return h_flex().id("pr-head").relative().h(64).flex_none().pl(16).pr(10).gap(12).items_center().bg(t.chrome)
       .border_b_1().border_color(t.border)
@@ -970,8 +1032,15 @@ export default class Review extends View {
         .when(sendMode && (this.kind === "reply" || !!this.file), (el) => el.child(btn("pr-refresh", t, { ic: "refresh",
           tooltip: this.kind === "reply" ? "Load the latest reply" : "Reload the file", onClick: (cx) => { cx.spawn(async (cx) => this.reloadContent(cx, true)); } })))
         .child(div().w(1).h(18).bg(t.border).flex_none())
-        .when(sendMode, (el) => el.child(btn("pr-send", t, { ic: "send", label: this.sending ? "Sending…" : compact ? "Send" : `Send to ${this.agentName}`,
-          variant: "solid", color: t.accent, kbd: compact ? null : "⌘↵", disabled: !n || !this.target || this.sending,
+        .when(sendMode && !!this.id && !n && !this.editing, (el) => el.child(btn("pr-done", t, { ic: "check", label: compact ? null : "Done reading",
+          tooltip: "Nothing to send: mark it read (it moves to Resolved in the inbox)", onClick: (cx) => this.done(cx) })))
+        .when(sendMode && !!this.target, (el) => el.child(btn("pr-send", t, { ic: "send", label: this.sending ? "Sending…" : compact ? "Send" : `Send to ${this.agentName}`,
+          variant: "solid", color: t.accent, kbd: compact ? null : "⌘↵", disabled: !n || this.sending,
+          onClick: (cx) => this.send(cx) })))
+        .when(sendMode && !this.target, (el) => el.child(btn("pr-send", t, { ic: this.file ? "check" : "copy",
+          label: this.sending ? "Saving…" : this.file ? (compact ? "Save" : "Save notes") : (compact ? "Copy" : "Copy notes"),
+          variant: "solid", color: t.accent, kbd: compact ? null : "⌘↵", disabled: !n || this.sending,
+          tooltip: this.file ? `No agent in this tab: add your notes to ${base(this.file)}.notes.md` : "No agent in this tab: copy your notes as markdown",
           onClick: (cx) => this.send(cx) })))
         .when(!sendMode, (el) => el.children(this.renderDecision(t, compact))))
       .when(!loading && !this.settings && !this.choice, (el) => el.child(btn("pr-side-toggle", t, { ic: "sidebar", active: this.showSide, tooltip: "Annotations", onClick: (cx) => this.toggleSide(cx) })))
@@ -1059,7 +1128,7 @@ export default class Review extends View {
     const where = [par.space, par.tab].filter(Boolean).join(" › ");
     const tip = [par.title, par.ended ? "This agent is no longer running." : "Go to this agent"].filter(Boolean).join("\n");
     const label = h_flex().gap(5).items_center().min_w(0)
-      .child(div().flex_none().text_color(par.ended ? t.dim : t.muted).child(`${this.id || !sendMode ? "from" : "to"} ${this.agentName}`))
+      .child(div().flex_none().text_color(par.ended ? t.dim : t.muted).child(`${(this.id && !this.openToTab) || !sendMode ? "from" : "to"} ${this.agentName}`))
       .when(!!where && !compact, (el) => el.child(div().flex_none().text_color(t.dim).child("·"))
         .child(div().min_w(0).truncate().text_color(t.dim).child(where)))
       .when(par.ended, (el) => el.child(div().flex_none().italic().text_color(t.dim).child("(ended)")));
@@ -1134,11 +1203,12 @@ export default class Review extends View {
       .child(div().relative().w(30).h(30).flex_none().rounded_full().bg(tint(c, "26")).text_color(c)
         .flex().items_center().justify_center().child(icon("send", 14)))
       .child(v_flex().relative().flex_1().min_w(0).gap(2)
-        .child(div().text_size(this.sz(13)).font_semibold().text_color(c).child(`Sent ${plural(s.count ?? 1, "note")} to ${this.agentName}`))
+        .child(div().text_size(this.sz(13)).font_semibold().text_color(c).child(s.savedTo
+          ? `Saved ${plural(s.count ?? 1, "note")} to ${base(s.savedTo)}` : `Sent ${plural(s.count ?? 1, "note")} to ${this.agentName}`))
         .child(div().text_size(this.sz(12)).text_color(t.muted).whitespace_normal()
           .child(this.kind === "reply" ? "Annotate its next reply the same way (it loads here when it arrives)."
             : this.liveFile ? "This file reloads when it changes: annotate it again for another round." : "Add more notes for another round.")))
-      .child(btn("pr-sent-copy", t, { ic: "copy", tooltip: "Copy what was sent", onClick: (cx) => {
+      .child(btn("pr-sent-copy", t, { ic: "copy", tooltip: s.savedTo ? "Copy what was saved" : "Copy what was sent", onClick: (cx) => {
         cx.spawn(async () => {
           const tmp = `${this.dir}/.clip.md`;
           await fs.writeFile(tmp, s.md ?? "");
@@ -1163,6 +1233,7 @@ export default class Review extends View {
         plan ? `Your feedback was sent. ${who} will revise the plan.` : `Your feedback was sent to ${who}.`]
       : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : this.choice ? "question" : "review request"} replaced this review.`]
       : d.decision === "dismissed" ? [t.dim, "x", "Closed", "Closed without a decision."]
+      : d.decision === "read" ? [green(t), "check", "Read", "Marked as read. It stays in the inbox under Resolved for a week."]
       : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."]);
     return fadeIn(h_flex(), this.appear.is("result"), 12, ENTER, { spring: SPRING }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
       .border_1().border_color(tint(color, "66")).shadow_md()

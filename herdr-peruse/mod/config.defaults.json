@@ -34,6 +34,7 @@
       "plan": { "heading": "Plan Feedback", "subject": "this plan" },
       "reply": { "heading": "Feedback on your last reply", "subject": "your last reply" },
       "file": { "heading": "Feedback on {name}", "subject": "`{path}`" },
+      "doc": { "heading": "Notes on {name}", "subject": "`{path}`" },
       "sections": {
         "remove": "Remove this",
         "change": "Change this",

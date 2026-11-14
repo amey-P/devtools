@@ -77,6 +77,7 @@ export interface Prompts {
     plan: FeedbackKindText;
     reply: FeedbackKindText;
     file: FeedbackKindText;
+    doc: FeedbackKindText;
     sections: Record<"remove" | "change" | "on" | "decision" | "general" | "generalOnly", Text>;
   };
   notes: { plan: { heading: Text; intro: Text }; other: { heading: Text; intro: Text } };
@@ -93,7 +94,8 @@ export interface ReviewConfig {
 
 // ---- the spool: <app home>/data/peruse/<id>/ (see the top of bin/bridge.mjs) --------------------------------
 
-export type ReviewKind = "plan" | "ask" | "choice" | "file" | "reply";
+/** doc: an agent published a document for the person to read (a long answer, a write-up with questions). */
+export type ReviewKind = "plan" | "ask" | "doc" | "choice" | "file" | "reply";
 export type ReviewMode = "decision" | "send";
 
 /** One question of a choice review (AskUserQuestion's shape). */
@@ -112,8 +114,11 @@ export interface ReviewRequest {
   agent: string | null;
   /** The hc terminal that asked. */
   terminal: string;
-  /** Where send-mode feedback is typed. */
-  target: string;
+  /** Where send-mode feedback is typed. null: the person opened it (peruse.mjs open), so it goes to the agent in the
+   *  tab, if any; with none, notes are saved beside the file. */
+  target: string | null;
+  /** "person": opened by the person (peruse.mjs open): it opens at once, focused, never as a pill or in the inbox. */
+  opener?: "agent" | "person";
   cwd: string;
   title: string;
   content: string;
@@ -134,17 +139,19 @@ export interface ReviewRequest {
 /** decision.json (the mod writes it). */
 export type Decision =
   | { decision: "approve" | "deny" | "dismissed"; feedback?: string; notes?: string; at: number }
+  /** A document marked as read (Done reading): nothing to send. */
+  | { decision: "read"; at: number }
   | { decision: "answer"; answers: Record<string, string>; notes?: Record<string, string>; at: number };
 
 /** seen.json: when the person opened the review / put it off. */
 export interface Seen { opened_at?: number; deferred_at?: number }
 
 /** sent.json: the last send of a send-mode review. */
-export interface SentRecord { at: number; md: string; to: string }
+export interface SentRecord { at: number; md: string; to: string | null; count?: number; /** Saved to this file instead (no agent). */ savedTo?: string }
 
 /** readReview()'s states. "orphaned" is set by the inbox when a pending review's agent is gone. */
 export type ReviewState =
-  | "pending" | "orphaned" | "draft" | "open" | "approved" | "changes" | "answered" | "sent" | "dismissed" | "replaced" | "interrupted";
+  | "pending" | "orphaned" | "draft" | "open" | "approved" | "changes" | "answered" | "sent" | "read" | "dismissed" | "replaced" | "interrupted";
 
 /** One review as ui.js readReview() returns it. The inbox adds `live` and `versions` afterwards. */
 export interface ReviewRecord {

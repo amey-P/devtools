@@ -289,6 +289,41 @@
               },
               "description": "For a file or an agent's review request. {name}: file name or title · {path}: file path."
             },
+            "doc": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "heading": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "Notes on {name}"
+                },
+                "subject": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "default": "`{path}`"
+                }
+              },
+              "description": "For a document an agent published for you to read (a long answer, a write-up). {name}: file name or title · {path}: file path."
+            },
             "sections": {
               "type": "object",
               "additionalProperties": false,
