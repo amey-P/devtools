@@ -143,6 +143,24 @@ cleaning up) shows as *Agent gone*. Discard it.
 To keep new reviews from popping up at all, set **When a review arrives → Wait in the inbox** in Settings
 (or `node install.mjs config window.arrive inbox`): a toast instead of a window, and the review waits in the inbox.
 
+## Plans and beads
+
+In plan mode, pi writes each plan to `.plans/<date>-<slug>/plan.md` and the handoff to `handoff.md` beside it.
+Once a plan is approved, the agent mirrors it in [beads](https://github.com/gastownhall/beads) (`bd`) so progress
+survives an interrupted session: one epic per plan, one issue per phase, each blocked by the one before. Each phase
+is claimed when it starts, its commit ends with a `Bead: <id>` trailer, and its issue closes with the commit's SHA.
+`git log --grep Bead:` finds the commits; `bd show <epic>` / `bd ready` show what's done and what's next.
+
+- **pi** gets this in `prompts.pi.planMode` / `prompts.pi.approved`. **Claude Code** gets it as a message typed
+  into its terminal right after you approve (`prompts.claude.approved`, joined with your notes), since Claude's own
+  plan mode can't be reworded.
+- **Nothing goes into git.** The agent runs `bd init --stealth --skip-agents` (which only adds `.beads/` to
+  `.git/info/exclude`, installs no git hooks and writes no AGENTS.md / CLAUDE.md) and sets `dolt.local-only`, so
+  nothing syncs to a remote. The project's `.gitignore` is never touched.
+- **Optional.** Without `bd` on PATH (`brew install beads`), agents skip it. To turn it off, delete the beads lines
+  from those prompts in ⚙ Settings (an empty `prompts.claude.approved` sends Claude nothing).
+- bd shares anonymous usage metrics by default; `bd metrics off` stops that.
+
 ## Settings
 
 Click **⚙** in a review's header (or in the inbox) to open the settings. Edits stay a draft until **Save** (⌘S).
@@ -154,7 +172,7 @@ updates every open review and the inbox straight away. To bind a key, add `mod.o
 |---|---|
 | **Window** | where reviews open (floating, split right/down, tab), floating size, focus, open vs. wait in the inbox |
 | **Appearance** | font (any installed family), text size, document and sidebar width, sidebar default, reading time |
-| **Agent text** | everything the agent is told: the "plan not approved" message, approved-with-notes, feedback headings and intro, section titles, pi's plan-mode framing, what pi is told when a plan is approved |
+| **Agent text** | everything the agent is told: the "plan not approved" message, approved-with-notes, feedback headings and intro, section titles, pi's plan-mode framing, what pi is told when a plan is approved, the beads steps typed into Claude after approval |
 
 Everything is saved as JSON in `$HERDR_APP_HOME/data/peruse/config.json`. The file holds only what differs from
 [`mod/config.defaults.json`](mod/config.defaults.json) and points at [`mod/config.schema.json`](mod/config.schema.json),
