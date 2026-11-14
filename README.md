@@ -8,8 +8,8 @@ One repo for everything custom around my coding agents: mods, layouts and agent 
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
-| `herdr-review/` | Review mod, inbox and settings | `mods/review`, `mods/review-inbox`, `mods/review-settings` (see [its README](herdr-review/README.md)) |
-| *agents* (opt-in) | The coding-agent integrations: herdr-review's Claude Code plugin (hooks, skills) and pi extension | Claude Code's `herdr-local` marketplace, pi's settings |
+| `herdr-peruse/` | Peruse: read and annotate any markdown (agent docs, plans, quick decisions), its inbox and settings | `mods/peruse`, `mods/peruse-inbox`, `mods/peruse-settings`, plus `mods/review` (a shim for the old name; see [its README](herdr-peruse/README.md)) |
+| *agents* (opt-in) | The coding-agent integrations: herdr-peruse's Claude Code plugin (hooks, skills) and pi extension | Claude Code's `herdr-local` marketplace, pi's settings |
 | `agents/` → *links* (opt-in) | pi powerline statusline extension, Claude Code statusline, custom skills (`explainer`, `git`), symlinked so edits apply at once | `~/.pi/agent/extensions/`, `~/.claude/statusline.sh`, `~/.agents/skills/` |
 | `herdr-subagents-mcp/` | Rust MCP server pi uses to spawn and steer herdr subagents (build with `cargo build --release`) | referenced from `~/.pi/agent/mcp.json` |
 
@@ -20,7 +20,7 @@ One repo for everything custom around my coding agents: mods, layouts and agent 
 ```sh
 git clone https://github.com/amey-P/devtools.git agentctl && cd agentctl
 ./install.sh                 # install everything
-./install.sh install git     # or one target: git | minimal | sidebar | usage | review
+./install.sh install git     # or one target: git | minimal | sidebar | usage | peruse
 ./install.sh status          # ● current  ◐ differs/symlink  ○ missing; exit 0 when all current
 ./install.sh uninstall [target]
 ```
@@ -33,7 +33,7 @@ You can also skip the clone:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash
-curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash -s -- install review   # pass a command/target
+curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash -s -- install peruse   # pass a command/target
 ```
 
 On Windows (PowerShell), run `.\install.ps1` in a clone (same commands and targets), or skip the clone:

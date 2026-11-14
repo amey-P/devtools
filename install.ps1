@@ -2,7 +2,7 @@
 # The work happens in install.mjs (Node 18+); this clones the repo first when run on its own.
 #
 #   .\install.ps1 [command] [target] [agent]     same commands and targets as install.sh:
-#     install | status | watch | uninstall        all | git | minimal | sidebar | usage | review | agents
+#     install | status | watch | uninstall        all | git | minimal | sidebar | usage | peruse | agents
 #
 # Without a clone (PowerShell):
 #   irm https://raw.githubusercontent.com/amey-P/devtools/main/install.ps1 | iex

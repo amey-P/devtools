@@ -7,7 +7,7 @@
 #     status     what's installed, and whether it matches the repo
 #     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 #     uninstall  remove what this repo installed (layouts are left alone)
-#   targets: all (default) | git | minimal | sidebar | usage | review | agents
+#   targets: all (default) | git | minimal | sidebar | usage | peruse | agents
 #   agents is opt-in and never part of `all` (the Claude Code plugin and pi extension):
 #   `install agents [claude|pi]` opts in, `uninstall agents [claude|pi]` opts out.
 #
