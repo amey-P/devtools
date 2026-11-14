@@ -7,12 +7,13 @@
 // the same agent made of the same kind.
 // Click or Enter: reopen the review where it was left (its notes are in draft.json). Esc closes the inbox.
 import { div, image, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import * as fs from "fs/promises";
 import { theme, agents, panes, exec, run, notify, watchFolder, openOverlay, closeOverlay } from "herdr";
 import {
   AGENT_NAMES, green, tint, plural, readJson, ago, readConfig, stopPress, icon, wash, dot, btn,
   spool, isReviewId, readReview, openReviewWindow, scaler, withFont,
+  Appear, SOFT, ENTER, EXIT, SPRING, SPRING_SNAPPY, stagger,
 } from "./ui.js";
 import { SETTINGS_WINDOW } from "./settings.js";
 
@@ -43,12 +44,16 @@ export class Inbox {
   constructor(overlay, cx) {
     this.overlay = overlay;
     this.h = cx.focus_handle();
+    // The list's position, held here rather than in the frame's element state, so re-renders keep it.
+    this.scroll = ScrollHandle.new();
     /** @type {ReviewRecord[]} */
     this.items = [];
     this.loaded = false;
     this.filter = "all";
     this.sel = 0;
     this.closing = false;
+    this.leaving = false;          // a floating inbox fading out before it closes
+    this.appear = new Appear(cx);  // the window and its rows come in (ui.js)
     this.sz = scaler(null);
     cx.spawn(async (cx) => { try {
       this.cfg = await readConfig();
@@ -75,7 +80,14 @@ export class Inbox {
   closeWindow() {
     if (this.closing || !this.overlay) return;
     this.closing = true;
-    closeOverlay(this.overlay);
+    const overlay = this.overlay;
+    const acx = this.appear.acx;
+    try {
+      if (!acx) throw 0;
+      this.leaving = true;
+      acx.notify();
+      acx.timer.after(EXIT.duration + 20, () => closeOverlay(overlay));
+    } catch { closeOverlay(overlay); }
   }
 
   async load() {
@@ -177,7 +189,13 @@ export class Inbox {
     const done = list.filter((r) => !r.needsYou);
     const root = withFont(v_flex(), this.cfg).id("inbox").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
-      .on_mouse_down("left", () => this.h.focus());
+      .on_mouse_down("left", () => this.h.focus())
+      // As its own floating window: drops in on a spring, lifts away fast as it closes.
+      .when(!!this.overlay, (el) => {
+        const shown = !this.leaving && this.appear.is("root");
+        return el.opacity(shown ? 1 : 0).transition("opacity", this.leaving ? EXIT : ENTER)
+          .top(this.leaving ? -6 : shown ? 0 : 12).spring("top", this.leaving ? SPRING_SNAPPY : SPRING);
+      });
     /** @param {string} label @param {number} n @param {Color} color @returns {Element} */
     const section = (label, n, color) => h_flex().px(16).pt(14).pb(6).gap(8).items_center()
       .child(div().text_size(10.5).font_semibold().text_color(color).child(label))
@@ -187,7 +205,7 @@ export class Inbox {
     const rows = (rs) => rs.map((r) => this.renderRow(r, idx++, t));
     return root
       .child(this.renderHeader(t))
-      .child(div().id("inbox-list").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(div().id("inbox-list").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
         // The list keeps its presses (the window drags by its header).
         .on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); })
         .when(!this.loaded, (el) => el.child(div().p(24).text_size(13).text_color(t.dim).child("Loading…")))
@@ -254,9 +272,12 @@ export class Inbox {
     const meta = [who, where, time].filter(Boolean);
     /** @param {string} s @returns {Element} */
     const sub = (s) => div().flex_none().child(s);
+    // Each row rises in once (staggered down the list), with a slight drift from the left; resolved rows rest dimmer.
+    const shown = this.appear.is(`row-${r.id}`);
     return h_flex().id(`inbox-r-${r.id}`).relative().mx(10).mb(6).pl(14).pr(8).py(9).gap(10).items_center().rounded(10)
       .bg(sel ? t.selected : t.background).border_1().border_color(sel ? tint(t.accent, "88") : t.border)
-      .when(!r.needsYou, (el) => el.opacity(0.75))
+      .top(shown ? 0 : 10).left(shown ? 0 : -6).spring("top", SPRING_SNAPPY).spring("left", SPRING_SNAPPY)
+      .opacity(shown ? (r.needsYou ? 1 : 0.75) : 0).transition("opacity", { ...SOFT, delay: shown ? stagger(i, 30) : 0 })
       .cursor_pointer().hover((s) => s.border_color(tint(t.accent, "66")))
       .on_click((_e, cx) => { this.sel = i; cx.spawn(async () => this.open(r)); cx.notify(); })
       .child(div().absolute().top(8).bottom(8).left(0).w(3).rounded(2).bg(c))

@@ -108,10 +108,20 @@ export const wash = (from, to, angle = 90) =>
 // ---- motion ------------------------------------------------------------------
 // Native transitions only animate a *later* change of target: an element that is new draws one frame at its start
 // value (hidden), then `Appear` flips it to shown and the transition carries it in.
+// Opacity rides an eased transition; position/size ride a native spring (damping < 1: one soft overshoot), so
+// surfaces land with a little settle instead of a flat stop. Exits are shorter and ease-in: they get out of the way.
 /** @type {import("./types").Motion} */
-export const SOFT = { duration: 200, easing: "ease-out" };
+export const SOFT = { duration: 220, easing: "ease-out" };
 /** @type {import("./types").Motion} */
-export const QUICK = { duration: 140, easing: "ease-out" };
+export const QUICK = { duration: 130, easing: "ease-out" };
+/** @type {import("./types").Motion} */
+export const ENTER = { duration: 260, easing: "ease-out" };
+/** @type {import("./types").Motion} */
+export const EXIT = { duration: 120, easing: "ease-in" };
+/** @type {import("gpui-shell").SpringPolicy} */
+export const SPRING = { response: 340, damping: 0.68 };
+/** @type {import("gpui-shell").SpringPolicy} */
+export const SPRING_SNAPPY = { response: 240, damping: 0.75 };
 
 export class Appear {
   /** `cx`: any context of the view that draws the elements (init's, or a handler's): its tasks redraw that view.
@@ -119,6 +129,8 @@ export class Appear {
   constructor(cx) {
     this.on = new Set();      // keys drawn shown
     this.pending = new Set(); // keys drawn hidden once, shown next frame
+    /** @type {Map<string, object>} */
+    this.timed = new Map();   // stage(): keys waiting on their own one-shot timer (value: that timer's token)
     this.acx = null;
     cx.spawn(async (acx) => { this.acx = acx; });
   }
@@ -139,18 +151,75 @@ export class Appear {
     this.pending.add(key);
     return false;
   }
+  /** Like `is`, but true only `ms` after `key` was first asked about (one timer, no polling): a later step of an
+   *  entrance, e.g. a glow that blooms and then settles.
+   *  @param {string} key @param {number} ms @returns {boolean} */
+  stage(key, ms) {
+    if (this.on.has(key)) return true;
+    if (!this.acx) { this.on.add(key); return true; }
+    if (!this.timed.has(key)) {
+      const token = {};
+      this.timed.set(key, token);
+      try {
+        this.acx.timer.after(ms, (cx) => {
+          if (this.timed.get(key) !== token) return; // forgotten (or re-armed) meanwhile
+          this.timed.delete(key);
+          this.on.add(key);
+          cx.notify();
+        });
+      } catch { this.timed.delete(key); this.on.add(key); return true; }
+    }
+    return false;
+  }
   /** Already shown, no entrance (e.g. notes restored from a draft).
    *  @param {string} key */
   mark(key) { this.on.add(key); }
   /** Gone: the next time it's drawn it comes in again.
    *  @param {string} key */
-  forget(key) { this.on.delete(key); this.pending.delete(key); }
+  forget(key) {
+    for (const k of [key, `${key}:glow`]) { this.on.delete(k); this.pending.delete(k); this.timed.delete(k); }
+  }
 }
 
-/** Fades `el` in and lifts it `dy` px into place once `shown`. */
-/** @type {<E extends import("gpui-kit").Element>(el: E, shown: boolean, dy?: number, policy?: import("./types").Motion) => E} */
-export const fadeIn = (el, shown, dy = 6, policy = SOFT) => el.relative().top(shown ? 0 : dy).opacity(shown ? 1 : 0)
-  .transition("opacity", policy).transition("top", policy);
+/** @typedef {{ spring?: import("gpui-shell").SpringPolicy, delay?: number }} FadeOpts */
+/** Fades `el` in and lifts it `dy` px into place once `shown`. `opts.spring`: the lift springs (settles with a small
+ *  overshoot) instead of easing; `opts.delay`: ms before it starts (staggered children). */
+/** @type {<E extends import("gpui-kit").Element>(el: E, shown: boolean, dy?: number, policy?: import("./types").Motion, opts?: FadeOpts) => E} */
+export const fadeIn = (el, shown, dy = 6, policy = SOFT, opts = {}) => {
+  const p = opts.delay ? { ...policy, delay: opts.delay } : policy;
+  const e = el.relative().top(shown ? 0 : dy).opacity(shown ? 1 : 0).transition("opacity", p);
+  return opts.spring ? e.spring("top", opts.spring) : e.transition("top", p);
+};
+
+/** fadeIn with a springy lift (and an optional sideways drift `dx`): popovers and list rows.
+ *  @type {<E extends import("gpui-kit").Element>(el: E, shown: boolean, o?: { dy?: number, dx?: number, delay?: number, spring?: import("gpui-shell").SpringPolicy, policy?: import("./types").Motion }) => E} */
+export const rise = (el, shown, o = {}) => {
+  const e = fadeIn(el, shown, o.dy ?? 8, o.policy ?? SOFT, { spring: o.spring ?? SPRING_SNAPPY, delay: o.delay });
+  return o.dx ? e.left(shown ? 0 : o.dx).spring("left", o.spring ?? SPRING_SNAPPY) : e;
+};
+
+/** Delay (ms) for the `i`th child of a staggered entrance; capped so long lists don't drag.
+ *  @param {number} i @param {number} [step] @param {number} [cap] @returns {number} */
+export const stagger = (i, step = 28, cap = 8) => Math.min(i, cap) * step;
+
+/** An accent halo behind a surface: put it in a `relative()` wrapper *before* the surface (a sibling, so it shows only
+ *  as a ring around it). `phase` 0 = hidden (first frame), 1 = bloom (bright, quick), 2 = rest (`rest` opacity, slow).
+ *  @param {Color} color @param {0 | 1 | 2} phase
+ *  @param {{ rest?: number, radius?: number, inset?: number }} [o] @returns {Element} */
+export const glow = (color, phase, o = {}) => {
+  const inset = o.inset ?? 3, radius = o.radius ?? 12, rest = o.rest ?? 0;
+  const op = phase === 0 ? 0 : phase === 1 ? 1 : rest;
+  /** @type {import("./types").Motion} */
+  const pol = phase === 2 ? { duration: 700, easing: "ease-out" } : { duration: 170, easing: "ease-out" };
+  const ring = (/** @type {number} */ d, /** @type {string} */ a) => div().absolute().top(-d).left(-d).right(-d).bottom(-d)
+    .rounded(radius + d).bg(tint(color, a));
+  return div().absolute().top(0).left(0).right(0).bottom(0).opacity(op).transition("opacity", pol)
+    .child(ring(inset + 4, "1a")).child(ring(inset + 1, "40"));
+};
+
+/** The glow phase for an entrance keyed `key`: hidden → bloom next frame → rest after `ms`.
+ *  @param {Appear} ap @param {string} key @param {number} [ms] @returns {0 | 1 | 2} */
+export const glowPhase = (ap, key, ms = 260) => (!ap.is(key) ? 0 : ap.stage(`${key}:glow`, ms) ? 2 : 1);
 
 // A status dot; `pulse` breathes a halo around it (native loop, no timer).
 /** @param {Color} color @param {boolean} [pulse] @param {number} [size] @returns {Element} */

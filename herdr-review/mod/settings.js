@@ -4,10 +4,10 @@
 // Edits are a draft until Save; Save writes only what differs from the defaults, and every open review and inbox
 // picks the change up (they watch data/review).
 import { div } from "gpui-kit";
-import { v_flex, h_flex, Input, InputState, Textarea, TextareaState, Scrollbar } from "gpui-base";
+import { v_flex, h_flex, Input, InputState, Textarea, TextareaState, Scrollbar, ScrollHandle } from "gpui-base";
 import { theme, fonts, notify, closeOverlay } from "herdr";
 import * as core from "./config-core.js";
-import { configDefaults, configPath, readConfig, writeConfig, tint, btn, icon, wash, stopPress, scaler, withFont, Appear, fadeIn, SOFT, QUICK } from "./ui.js";
+import { configDefaults, configPath, readConfig, writeConfig, tint, btn, icon, wash, stopPress, scaler, withFont, Appear, fadeIn, SOFT, QUICK, ENTER, EXIT, SPRING, SPRING_SNAPPY } from "./ui.js";
 
 /** @import { ReviewConfig, Theme } from "./types"
  *  @import { Color, Element, Context, AsyncContext, KeyEvent } from "gpui-kit" */
@@ -75,6 +75,7 @@ export class Settings {
     this.overlay = overlay;
     this.onClose = onClose;
     this.h = cx.focus_handle();
+    this.scroll = ScrollHandle.new(); // the page's position: re-renders (every edit) keep it
     this.appear = new Appear(cx); // the tab body and the font list fade / grow in
     this.tab = "window";
     this.loaded = false;
@@ -86,6 +87,7 @@ export class Settings {
     /** @type {InputState | null} */
     this.fontQuery = null;  // InputState of the font search
     this.closing = false;
+    this.leaving = false; // a floating settings window fading out before it closes
     /** @type {string[]} */
     this.allFonts = [];
     this.filling = false;   // set while fields are filled from the draft (their change events aren't edits)
@@ -160,8 +162,16 @@ export class Settings {
     if (this.onClose) { this.onClose(); return; }
     if (this.closing || !this.overlay) return;
     this.closing = true;
-    this.release();
-    closeOverlay(this.overlay);
+    const overlay = this.overlay;
+    const go = () => { this.release(); closeOverlay(overlay); };
+    // Fade out first (the fields stay alive until the window is gone).
+    const acx = this.appear.acx;
+    try {
+      if (!acx) throw 0;
+      this.leaving = true;
+      acx.notify();
+      acx.timer.after(EXIT.duration + 20, go);
+    } catch { go(); }
   }
 
   /** @param {Context} cx */
@@ -218,14 +228,20 @@ export class Settings {
   render(t = theme()) {
     const root = v_flex().id("settings").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
-      .on_mouse_down("left", () => this.h.focus());
+      .on_mouse_down("left", () => this.h.focus())
+      // As its own floating window: drops in on a spring, lifts away fast as it closes.
+      .when(!!this.overlay, (el) => {
+        const shown = !this.leaving && this.appear.is("root");
+        return el.opacity(shown ? 1 : 0).transition("opacity", this.leaving ? EXIT : ENTER)
+          .top(this.leaving ? -6 : shown ? 0 : 12).spring("top", this.leaving ? SPRING_SNAPPY : SPRING);
+      });
     if (!this.loaded) return root.items_center().justify_center().child(div().text_size(13).text_color(t.dim).child("Loading…"));
     const body = this.tab === "window" ? this.renderWindow(t) : this.tab === "ui" ? this.renderUi(t) : this.renderPrompts(t);
     return root
       .child(this.renderHeader(t))
-      .child(div().id("settings-body").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(div().id("settings-body").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
         .on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); })
-        .child(fadeIn(v_flex().id(`settings-tab-${this.tab}`), this.appear.is(`tab-${this.tab}`), 4).w_full().max_w(720).mx_auto().px(20).py(16).gap(4).child(body)))
+        .child(fadeIn(v_flex().id(`settings-tab-${this.tab}`), this.appear.is(`tab-${this.tab}`), 6, SOFT, { spring: SPRING_SNAPPY }).w_full().max_w(720).mx_auto().px(20).py(16).gap(4).child(body)))
       .child(this.renderFooter(t));
   }
 
@@ -316,7 +332,7 @@ export class Settings {
     return div().id(`st-${path}`).relative().w(34).h(20).rounded_full().cursor_pointer()
       .bg(on ? t.accent : t.raised).border_1().border_color(on ? t.accent : t.border)
       .on_click((_e, cx) => { this.setValue(path, !on); cx.notify(); })
-      .child(div().id(`st-${path}-knob`).absolute().top(2).left(on ? 16 : 2).transition("left", SOFT).w(14).h(14).rounded_full().bg(on ? t.background : t.muted));
+      .child(div().id(`st-${path}-knob`).absolute().top(2).left(on ? 16 : 2).spring("left", SPRING_SNAPPY).w(14).h(14).rounded_full().bg(on ? t.background : t.muted));
   }
 
   /** @param {Theme} t @param {string} path @param {string} unit @returns {Element} */
