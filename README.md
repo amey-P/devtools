@@ -56,7 +56,20 @@ The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a c
 
 ## Git in the sidebar
 
-`herdr-git` is a section at the bottom of the minimal layout's sidebar, above the usage widget (the sidebar's `git` block). Closed, it is one row: the branch with a clean/dirty/conflict dot, a rebase/merge/cherry-pick/revert/bisect in progress (with its step), the number of changed files and ahead/behind. Clicking it opens the block (Herdr keeps the size, so it stays open across restarts) to show the working tree, branches (ahead/behind, which worktree has each checked out), worktrees (click to open or switch to their space) and stashes. The commit graph and commit details are too wide for the sidebar: the graph button, or ctrl-shift-g, opens the full view as a window. On the narrow icon rail the row shrinks to the branch glyph, and a click opens that window.
+`herdr-git` is a section at the bottom of the minimal layout's sidebar, above the usage widget (the sidebar's `git` block). Closed, it is one row: the branch with a clean/dirty/conflict dot, a rebase/merge/cherry-pick/revert/bisect in progress (with its step), the number of changed files and ahead/behind. Clicking it opens the block (Herdr keeps the size, so it stays open across restarts). The block describes the current worktree only: its working tree, how far it is ahead of and behind the base branch, its recent and incoming commits, and the agents whose terminals are in it (click one to focus it). With more than one checkout, a row at the bottom sums up the rest (`5 worktrees · 2 dirty · 1 blocked`) and opens the overview. The commit graph and commit details are too wide for the sidebar: the graph button, or ctrl-shift-g, opens the full view as a window. On the narrow icon rail the row shrinks to the branch glyph, and a click opens that window.
+
+### Worktree overview
+
+Built for agent workflows where each agent works in its own `git worktree`. When the repo has more than one checkout, the window opens on an overview with one card per worktree. Each card shows:
+
+- the branch and folder
+- an operation in progress and conflicts
+- how far it is ahead of and behind the base branch, and its upstream
+- changed files and lines, and the last commit
+- `merged`, `no commits yet`, `locked` or `missing` when they apply
+- the agents working in it, with their status (click one to focus it)
+
+The worktree you're in comes first. The rest are ordered by what needs you: a conflict or a stopped rebase, then a blocked agent, a finished agent, uncommitted work and unmerged commits; clean ones come next, and merged or missing ones last. Click a card (or j/k and Enter) to drill into the full view for that worktree. Its history starts on "Since main", which shows only that worktree's own commits. Esc or `‹ Worktrees` goes back. `o` opens the worktree's space. The base branch is `git config herdr.base` if set, else `origin/HEAD`, else `main`/`master`/`trunk`. Cards refresh every 8 seconds while the overview is shown, and right away when anything under the shared git dir changes.
 
 It follows the focused terminal's repo, falling back to the tab's other terminals and the space's folder. It handles ordinary checkouts, linked worktrees, submodules, a folder inside `.git` and bare repos (including the `.bare` + worktrees layout), on this machine or a space's. Locally it watches the work tree and both git dirs, so commits made in any worktree show up at once. ctrl-shift-g opens the full view in any layout (`./install.sh install git` rebinds the old split-pane key; anything else bound there is left alone). `node --test herdr-git/test` runs its unit tests.
 
