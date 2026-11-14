@@ -42,8 +42,9 @@
           "id": "git",
           "type": "block",
           "size": {
-            "px": 36
+            "weight": 1
           },
+          "window_drag": true,
           "content": {
             "mod": "git",
             "props": {

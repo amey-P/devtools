@@ -2,7 +2,7 @@
 // `git(args)` already bound to the repo's folder and machine. Parsers are pure.
 import { norm, join, base, samePath } from "./paths.js";
 
-/** @import { Repo, RunIn, ReadFile, Status, NumStat, Ref, Commit, Branch, Worktree, Stash, Operation, RefsState } from "./types" */
+/** @import { Repo, RunIn, ReadFile, Status, NumStat, Ref, Commit, Branch, Worktree, Stash, Operation, RefsState, RecentCommit, Insight } from "./types" */
 
 // Reads write nothing under .git (no index refresh, lock or fsmonitor
 // cookie), so the folder watch never sees our own reads.
@@ -151,6 +151,17 @@ export function parseLog(text, /** @type {string[]} */ remotes, /** @type {strin
 /** @param {Status} s @returns {number} */
 export const dirtyCount = (s) => (s ? s.staged.length + s.modified.length + s.untracked.length + s.conflicts.length : 0);
 
+/**
+ * Lines added and removed across staged, modified and conflicted files (untracked have no counts).
+ * @param {Status | null} s
+ * @returns {{ add: number, del: number }}
+ */
+export function changeTotals(s) {
+  let add = 0, del = 0;
+  if (s) for (const f of [...s.staged, ...s.modified, ...s.conflicts]) { add += f.add ?? 0; del += f.del ?? 0; }
+  return { add, del };
+}
+
 // ── Loaders ──────────────────────────────────────────────────────────────
 
 /**
@@ -185,6 +196,26 @@ export async function loadHead(git) {
 }
 
 /**
+ * `git log -1 --format=%s%x1f%ct` output → the last commit's subject and time.
+ * @param {string} text
+ * @returns {{ subject: string, at: number } | null}
+ */
+export function parseTip(text) {
+  const [subject, at] = text.trim().split("\x1f");
+  return subject ? { subject: subject.trim(), at: Number(at) || 0 } : null;
+}
+
+/**
+ * The commit HEAD points at, for the sidebar strip (which never loads the log).
+ * @param {RunIn} git
+ * @returns {Promise<{ subject: string, at: number } | null>}
+ */
+export async function loadTip(git) {
+  const r = await git(["log", "-1", "--format=%s%x1f%ct", "HEAD"]);
+  return r.code === 0 ? parseTip(r.stdout) : null;
+}
+
+/**
  * Branches, worktrees, stashes, remotes and the latest tag.
  * @param {Repo} repo
  * @param {RunIn} git
@@ -197,8 +228,9 @@ export async function loadRefs(repo, git, gitAt) {
     git(["worktree", "list", "--porcelain", "-z"]),
     git(["stash", "list", "--format=%gd%x1f%s%x1f%ct"]),
     git(["remote", "-v"]),
-    git(["describe", "--tags", "--abbrev=0"]),
+    git(["describe", "--tags", "--long"]),
   ]);
+  const described = tag.code === 0 ? parseDescribe(tag.stdout) : null;
   const branches = br.code === 0 ? parseBranches(br.stdout) : [];
   // A bare repo's own entry is "checked out" nowhere: drop worktreepath that is the repo itself.
   for (const b of branches) if (b.worktree && samePath(b.worktree, repo.commonDir)) b.worktree = null;
@@ -214,7 +246,72 @@ export async function loadRefs(repo, git, gitAt) {
     branches, worktrees,
     stashes: st.code === 0 ? parseStashes(st.stdout) : [],
     remotes: rm.code === 0 ? parseRemotes(rm.stdout) : {},
-    tag: tag.code === 0 ? tag.stdout.trim() || null : null,
+    tag: described?.tag ?? null,
+    tagSince: described?.since ?? 0,
+  };
+}
+
+/**
+ * `git describe --tags --long` → the tag and how many commits HEAD is past it.
+ * @param {string} text e.g. "v1.2-5-gabc1234" (tags may contain dashes)
+ * @returns {{ tag: string, since: number } | null}
+ */
+export function parseDescribe(text) {
+  const m = /^(.+)-(\d+)-g[0-9a-f]+$/.exec(text.trim());
+  return m ? { tag: m[1], since: +m[2] } : null;
+}
+
+const RECENT_FORMAT = ["%h", "%an", "%ae", "%ct", "%s"].join("%x1f");
+
+/** @param {string} text @returns {RecentCommit[]} */
+export function parseRecent(text) {
+  return lines(text).map((l) => {
+    const [hash, author, email, at, subject] = l.split(US);
+    return { hash, author: author ?? "", email: email ?? "", at: +at || 0, subject: subject ?? "", unpushed: false };
+  }).filter((c) => c.hash);
+}
+
+/**
+ * Commits per local calendar day for the last `days` days, oldest first (the last is today).
+ * @param {number[]} times seconds since the epoch
+ * @param {number} nowSec
+ * @param {number} [days]
+ * @returns {number[]}
+ */
+export function bucketDays(times, nowSec, days = 14) {
+  const out = new Array(days).fill(0);
+  const today = new Date(nowSec * 1000); today.setHours(0, 0, 0, 0);
+  const start = today.getTime() / 1000;
+  for (const t of times) {
+    const back = t >= start ? 0 : Math.ceil((start - t) / 86400);
+    if (back < days) out[days - 1 - back]++;
+  }
+  return out;
+}
+
+/**
+ * What the sidebar shows beyond the status: recent and incoming commits, the
+ * last two weeks' activity and the commit count. Every read falls back to empty.
+ * @param {RunIn} git
+ * @param {Status | null} status
+ * @returns {Promise<Insight>}
+ */
+export async function loadInsight(git, status) {
+  /** @param {string[]} args */
+  const out = (args) => git(args).then((r) => (r.code === 0 ? r.stdout : ""), () => "");
+  const [recent, incoming, times, total] = await Promise.all([
+    out(["log", "-n", "6", `--format=${RECENT_FORMAT}`, "HEAD"]),
+    status?.behind ? out(["log", "-n", "4", `--format=${RECENT_FORMAT}`, "HEAD..@{u}"]) : Promise.resolve(""),
+    out(["log", "--since=14.days.ago", "--format=%ct", "HEAD"]),
+    out(["rev-list", "--count", "HEAD"]),
+  ]);
+  const rec = parseRecent(recent);
+  rec.forEach((c, i) => { c.unpushed = Boolean(status?.upstream) && i < (status?.ahead ?? 0); });
+  return {
+    recent: rec,
+    incoming: parseRecent(incoming),
+    activity: bucketDays(lines(times).map(Number).filter(Boolean), Date.now() / 1000),
+    total: Number(total.trim()) || 0,
   };
 }
 
