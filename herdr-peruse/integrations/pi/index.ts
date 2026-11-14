@@ -1,5 +1,5 @@
 // @ts-nocheck
-// Herdr plan review for pi.
+// Herdr peruse for pi: plan review (submit_plan), documents to read and annotate (peruse) and questions (ask_user).
 //
 // Plan mode is on while mode-manager's mode is "plan" (`/mode plan`, Alt+M) or after `/plan` here.
 // While planning: write/edit are limited to markdown files inside the working directory, and the
@@ -215,15 +215,22 @@ export default function (pi) {
     label: "Peruse",
     executionMode: "sequential",
     description:
-      "Ask the user to review and annotate a markdown/text file in the Herdr app (a draft, spec, design note, long answer). " +
-      "Not for plans: use submit_plan in plan mode. With wait=true, blocks until the user sends feedback and returns it " +
-      "(or LGTM). With wait=false, the review opens and you continue; the feedback arrives later as the user's next message.",
+      "Show the user a markdown file to read and annotate in the Herdr app, instead of a wall of text in the terminal. " +
+      "Use it on your own when an answer would run past ~40 lines or needs sections, tables or long code, when you have 3+ " +
+      "open questions that need context (put them in the file as ```choice blocks: a question line, then `- label: description` " +
+      "options), or when the user asks to read or annotate something. Not for plans (submit_plan) or 1-4 quick questions (ask_user). " +
+      "With wait=false (the default), it opens and you continue; the user's notes arrive later as their next message. " +
+      "With wait=true, blocks until the user sends notes and returns them (or LGTM).",
+    promptSnippet: "peruse: show the user a long answer or a document with questions to read and annotate in Herdr",
+    promptGuidelines: [
+      "When an answer would run past ~40 lines, or you have 3+ questions that need context, write it to .peruse/<YYYY-MM-DD>-<slug>.md (questions as ```choice blocks beside their context) and call peruse on it; in the terminal, reply in 1-3 lines with the gist and the path. Keep .peruse/ out of git via .git/info/exclude if `git check-ignore -q .peruse` fails.",
+    ],
     parameters: Type.Object({
-      filePath: Type.String({ description: "Path to the file to review, relative to the working directory." }),
-      title: Type.Optional(Type.String({ description: "A short title for the review." })),
-      wait: Type.Optional(Type.Boolean({ description: "Block until the user responds (default true)." })),
+      filePath: Type.String({ description: "Path to the markdown file to show, relative to the working directory." }),
+      title: Type.Optional(Type.String({ description: "A short title." })),
+      wait: Type.Optional(Type.Boolean({ description: "Block until the user responds (default false)." })),
       place: Type.Optional(Type.Union(["float", "right", "down", "tab"].map((p) => Type.Literal(p)), {
-        description: "Where the review opens. Leave it out to use the user's setting (a floating window unless they changed it).",
+        description: "Where it opens. Leave it out to use the user's setting (a floating window unless they changed it).",
       })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -233,23 +240,24 @@ export default function (pi) {
       if (!path || !existsSync(full) || !statSync(full).isFile()) return text(`Error: ${path || "(nothing)"} does not exist.`);
       const content = readFileSync(full, "utf8");
       if (!content.trim()) return text(`Error: ${path} is empty.`);
-      const wait = params?.wait !== false;
+      const wait = params?.wait === true;
       let bridge;
       try { bridge = await import(pathToFileURL(BRIDGE).href); }
-      catch { return text("The Herdr review isn't installed here. Ask the user for feedback in chat."); }
+      catch { return text("Herdr's peruse mod isn't installed here. Give the answer in chat instead."); }
+      const open = bridge.openDoc ?? bridge.openReview;
       let r;
       try {
-        r = await bridge.openReview({ kind: "ask", mode: wait ? "decision" : "send", agent: "pi", content, file: full,
+        r = await open({ kind: "doc", mode: wait ? "decision" : "send", agent: "pi", content, file: full,
           title: params?.title, place: params?.place, cwd: ctx.cwd, signal });
       } catch (e) {
-        if (signal?.aborted) return text("The review was interrupted.");
+        if (signal?.aborted) return text("Interrupted.");
         throw e;
       }
-      if (!r) return text("Not running inside the Herdr app. Ask the user for feedback in chat.");
-      if (!wait) return text("The review is open in Herdr. Continue; the feedback will arrive as the user's next message.");
+      if (!r) return text("Not running inside the Herdr app. Give the answer in chat instead.");
+      if (!wait) return text("It's open in Herdr. Reply in 1-3 lines (the gist and the path) and stop; the user's notes will arrive as their next message.");
       if (r.decision === "approve") return text(r.notes?.trim() ? `The user approved, with notes:\n\n${r.notes.trim()}` : "LGTM: the user approved it without changes.");
-      if (r.decision === "deny") return text(`The user's feedback:\n\n${(r.feedback ?? "").trim()}\n\nAddress all of it.`);
-      return text("The user closed the review without responding. Ask them in chat how to proceed.");
+      if (r.decision === "deny") return text(`The user's notes:\n\n${(r.feedback ?? "").trim()}\n\nAddress all of them.`);
+      return text("The user closed it without responding. Ask them in chat how to proceed.");
     },
   });
 
