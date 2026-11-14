@@ -33,7 +33,7 @@ const FRAMING = [
   "Research before you ask",
   "- Read the code the change touches, its callers, its tests, and how it's built and run. Settle facts by reading or running things. Don't guess.",
   "- Scouts: subagent with agent \"scout\". Tell them not to edit anything. While planning, never spawn a worker or any agent that writes files.",
-  "- Check where the work will start: git status, the current branch, uncommitted changes (the plan file itself doesn't count), and the commands that build and test the code. These go in \"Starting point\", and anything to sort out goes in Phase 0.",
+  "- Check where the work will start: git status, the current branch, uncommitted changes (the .plans/ folder doesn't count), and the commands that build and test the code. These go in \"Starting point\", and anything to sort out goes in Phase 0.",
   "- Note what the code couldn't settle. Those points, and only those, become questions.",
   "",
   "Ask only what the code can't answer, and spare the user's attention",
@@ -56,9 +56,15 @@ const FRAMING = [
   "- Fix what holds up, and note what you rejected under Review. If the review raises something only the user can decide, ask it as above.",
   "- If no subagent tool is available, or the task is small, review the plan yourself and say so.",
   "",
+  "Where the plan goes",
+  "- One folder per plan: .plans/<YYYY-MM-DD>-<slug>/ at the root of the working directory. The date is today's (`date +%F`); the slug is 2-4 lowercase words naming the task, joined by hyphens (e.g. .plans/2026-11-14-worktree-overview/).",
+  "- The plan is plan.md in that folder. The handoff, written once the plan is implemented, is handoff.md beside it. Scout or reviewer notes may go there too.",
+  "- Never write a plan or handoff anywhere else: not the repo root, not .pi/ or another agent's folder, not a shared name like PLAN.md that the next plan would overwrite. If the folder already exists from another task, pick a different slug.",
+  "- Revisions after feedback edit the same plan.md. Don't start a new folder.",
+  "",
   "Submit",
-  "- Write the plan to a markdown file (e.g. PLAN.md) using the template below, then call {tool} with its path. The user approves it or sends feedback.",
-  "- Feedback is not failure: address ALL of it in the same file, then call {tool} again.",
+  "- Write the plan to plan.md in its folder using the template below, then call {tool} with that path (e.g. .plans/2026-11-14-worktree-overview/plan.md). The user approves it or sends feedback.",
+  "- Feedback is not failure: address ALL of it in the same plan.md, then call {tool} again.",
   "",
   "Template (fill in each <...>):",
   "",
@@ -84,7 +90,8 @@ const FRAMING = [
   "## Phases",
   "### Phase 0: Prepare",
   "- <Deal with uncommitted changes as planned above. Create <new branch>.>",
-  "- Verify: `git status` shows <new branch>, with nothing uncommitted except the plan.",
+  "- Keep .plans/ out of git: if `git check-ignore -q .plans` fails, add .plans/ to .git/info/exclude (local; leave the project's .gitignore alone), unless the project keeps plans in git.",
+  "- Verify: `git status` shows <new branch>, with nothing uncommitted outside .plans/.",
   "",
   "### Phase 1: <goal>",
   "- Files: `<path>`, ...",
@@ -105,11 +112,11 @@ const FRAMING = [
 const APPROVED = [
   "Plan approved. Plan mode is over: implement the plan in {path} now, starting with Phase 0, and go phase by phase without waiting for the user in between.",
   "- Follow the plan's Principles while implementing.",
-  "- Never push, force-push or rewrite history unless the approved plan says to. Don't commit the plan or the handoff file unless the project keeps plans in git.",
+  "- Never push, force-push or rewrite history unless the approved plan says to. Don't commit the .plans/ folder unless the project keeps plans in git.",
   "- A phase is done when its verification passes. Then commit it with the message the plan gives.",
   "- If the repo no longer matches the plan's \"Starting point\" (new uncommitted changes, a different branch), stop and ask.",
   "- If a check fails and the fix stays inside the phase, fix it. If the fix would change the plan (another approach, files the plan doesn't list, a new decision), stop. Leave no broken commit, and report what failed with options and a recommendation.",
-  "- When every phase is done, write a short handoff next to the plan: the commits per phase, what was verified and how, and anything to check by hand. Then call request_review on it with wait=false, so it waits in the user's review inbox until they're free. Finally, open the demo for the user: the app, or a Herdr pane set up to try it."
+  "- When every phase is done, write a short handoff to handoff.md in the same folder as {path}, never anywhere else: the commits per phase, what was verified and how, and anything to check by hand. Then call request_review on it with wait=false, so it waits in the user's review inbox until they're free. Finally, open the demo for the user: the app, or a Herdr pane set up to try it."
 ].join("\n");
 const PLAN_OFF = "Plan mode is over. You may now edit files and run commands normally.";
 /** Fills {tool} / {path} in a fallback text, as the bridge does for the settings' text. */
@@ -295,7 +302,7 @@ export default function (pi) {
       "directory first, then pass its path. Blocks until the user decides: approval means implement the plan now; " +
       "otherwise the result is their feedback: edit the same file to address all of it and call this again.",
     parameters: Type.Object({
-      filePath: Type.String({ description: "Path to the markdown plan file, relative to the working directory (e.g. PLAN.md)." }),
+      filePath: Type.String({ description: "Path to the markdown plan file, relative to the working directory (e.g. .plans/2026-11-14-worktree-overview/plan.md)." }),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const path = String(params?.filePath ?? "").trim();
