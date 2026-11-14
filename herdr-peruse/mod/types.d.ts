@@ -82,6 +82,7 @@ export interface Prompts {
   };
   notes: { plan: { heading: Text; intro: Text }; other: { heading: Text; intro: Text } };
   pi: { planMode: Text; planOff: Text; approved: Text };
+  claude: { approved: Text };
 }
 
 /** The settings in effect (ui.js readConfig(): config-core merge() of the defaults and config.json). */

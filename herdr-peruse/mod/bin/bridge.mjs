@@ -445,12 +445,14 @@ export function sendLater(terminal, text, delayMs = 1500) {
  *  the notes on an approved plan; `planMode` / `planOff` frame pi's plan mode and `approved` is what pi is told once its
  *  plan is approved (`tool`: its submit tool's name, `path`: the plan file).
  *  @param {{ tool?: string, path?: string }} [opts]
- *  @returns {{ deny: string; approvedWithNotes: string; planMode: string; planOff: string; approved: string }} */
+ *  `claudeApproved` is typed into Claude's terminal once its plan is approved (the beads steps; empty turns it off).
+ *  @returns {{ deny: string; approvedWithNotes: string; planMode: string; planOff: string; approved: string; claudeApproved: string }} */
 export function prompts({ tool = "submit_plan", path = "the plan file" } = {}) {
   const p = loadConfig().prompts;
   return { deny: text(p.deny), approvedWithNotes: text(p.approvedWithNotes),
     planMode: text(p.pi.planMode, { tool }), planOff: text(p.pi.planOff, { tool }),
-    approved: text(p.pi.approved, { tool, path }) };
+    approved: text(p.pi.approved, { tool, path }),
+    claudeApproved: p.claude?.approved ? text(p.claude.approved, { path }) : "" };
 }
 // Kept for integrations installed before prompts() (Claude caches its plugin per version).
 export const DENY_PREFIX = prompts().deny;

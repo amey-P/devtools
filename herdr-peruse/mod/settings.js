@@ -54,6 +54,9 @@ const PROMPTS = [
     ["prompts.pi.planOff", "When plan mode ends", ""],
     ["prompts.pi.approved", "When a plan is approved", "{path}: the plan file · {tool}: the submit tool. Your notes follow it."],
   ]],
+  ["Claude plan mode", [
+    ["prompts.claude.approved", "When a plan is approved", "Typed into Claude's terminal after approval (the beads steps); leave empty to send nothing. {path}: the plan file. Your notes follow it."],
+  ]],
 ];
 
 // The font list: row height (28 + 1 gap), how tall it gets, and how many fonts it draws before "keep typing".
@@ -217,7 +220,7 @@ export class Settings {
 
   /** @param {string} path @returns {TextareaState} */
   textState(path) {
-    const multi = path === "prompts.pi.planMode" || path === "prompts.pi.approved" || path === "prompts.deny" || path === "prompts.approvedWithNotes";
+    const multi = path === "prompts.pi.planMode" || path === "prompts.pi.approved" || path === "prompts.claude.approved" || path === "prompts.deny" || path === "prompts.approvedWithNotes";
     const s = TextareaState.new({ rows: multi ? 3 : 1 });
     s.set_auto_grow(multi ? 3 : 1, 12);
     s.on("change", (_e, cx) => { if (this.filling || !this.loaded) return; this.setValue(path, s.value()); cx.notify(); });

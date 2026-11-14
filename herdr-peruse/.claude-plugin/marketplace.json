@@ -11,7 +11,7 @@
       "name": "herdr-peruse",
       "source": "./integrations/claude",
       "description": "Read and annotate any markdown in the Herdr app: documents and long answers agents hand you, plans to approve, and quick decisions to click.",
-      "version": "0.5.0"
+      "version": "0.5.1"
     }
   ]
 }

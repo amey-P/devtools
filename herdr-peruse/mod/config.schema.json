@@ -649,6 +649,32 @@
             }
           },
           "description": "pi's plan mode."
+        },
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "approved": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "default": [
+                "Plan approved. Track its phases in beads while you implement, so progress survives an interrupted session. If `command -v bd` fails, skip this and say so once.",
+                "- Setup, once per repo: if .beads/ is missing, run `bd init --stealth --skip-agents --quiet` then `bd config set dolt.local-only true`. If `git check-ignore -q .beads` still fails, add .beads/ to .git/info/exclude. Never commit .beads/ and never edit the project's .gitignore for it.",
+                "- Before implementing: `bd create \"<plan title>\" -t epic -d \"{path}\" --silent` prints the epic's ID. Then, in order, one `bd create \"<phase or step>\" --parent <epic> --deps <previous one's ID> --silent` per phase or major step of the plan (the first has no --deps). If you've already started, create them now and close what's done.",
+                "- Each phase: `bd update <id> --claim` before you start it, end its commit message with a `Bead: <id>` trailer, then `bd close <id> --reason \"<short sha>\"`. Close the epic after the last phase.",
+                "- Resuming: `bd show <epic>` and `bd ready` say which phase is next. When you report back at the end, name the epic and each phase's issue ID."
+              ]
+            }
+          }
         }
       },
       "description": "What the agent is told. Text may be a string or an array of lines; {placeholders} are filled in."
