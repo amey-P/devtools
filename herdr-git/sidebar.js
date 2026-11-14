@@ -9,28 +9,35 @@
 // and remotes. Colors mean the same thing everywhere, as soft tints and thin
 // left rails: accent is HEAD; green staged, ahead, unpushed, in sync; amber
 // modified, behind, incoming; red conflicts, gone, missing; blue untracked and
-// remotes; magenta stashes; yellow tags; dim no upstream or stale. The strip lights
+// remotes; yellow tags; dim no upstream or stale. It describes the current
+// worktree only: what it has against the base branch, its commits and the agents
+// working in it; one row at the bottom sums up the other worktrees and opens the
+// overview (overview.js). The strip lights
 // up when the workspace changes or the repo changes in a way worth noticing
 // (pulse.js). Narrower than NARROW the section is a rail: the glyph over a column
 // of small marks (ahead/behind, the changes as an upright bar, lines changed, two
-// weeks of activity, stashes, tag, last commit's age) with the strip as a hover
+// weeks of activity, against the base branch, tag, last commit's age) with the strip as a hover
 // card. The commit graph is too wide for the sidebar: the graph button (or
-// ctrl-shift-g) opens the full view as a window.
+// ctrl-shift-g) opens the full view as a window, on the worktree overview when
+// there is more than one.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, HoverCard } from "gpui-base";
-import { run, spaces } from "herdr";
+import { run } from "herdr";
 import { ICON, ago, alpha, plural, palette, hashOf, initials, compact } from "./ui.js";
-import { base, samePath, repoName, shortRemote } from "./paths.js";
-import { dirtyCount, changeTotals } from "./load.js";
+import { base, samePath, repoName } from "./paths.js";
+import { dirtyCount, changeTotals, isBaseBranch } from "./load.js";
 import { pulseColor } from "./pulse.js";
+import { agentsFor, agentRow } from "./overview.js";
+import { totals } from "./worktrees.js";
 
-/** @import { Theme, Branch, Worktree, Stash, RecentCommit } from "./types" */
+/** @import { Theme, RecentCommit, BaseDelta } from "./types" */
+/** @import { PaneInfo } from "herdr" */
 /** @import { Color, Element } from "gpui-kit" */
 /** @typedef {import("./main.js").default} Git */
 
 export const STRIP = 80;       // the strip's height, margins included
 export const NARROW = 160;     // below this the sidebar is the icon rail
-const HEAD = 34, SEC_HEAD = 26, SEC_ROW = 24, BANNER = 38, ACTIVITY = 68;
+const HEAD = 34, SEC_HEAD = 26, SEC_ROW = 24, BANNER = 38, ACTIVITY = 68, SUMMARY = 36;
 const DAY = 86400;
 const LIST_MAX = 8 * 24;       // the status card's file list, at most
 /** @typedef {import("gpui-shell").TransitionPolicy} Policy */
@@ -44,6 +51,48 @@ const LIST_MAX = 8 * 24;       // the status card's file list, at most
 
 /** Opens (or, pressed again, closes) the full git view as a window. */
 const openFull = () => run("mod.open", { name: "git" });
+
+/**
+ * The repo's name and, in a linked worktree, the worktree's folder.
+ * @param {Git} g
+ * @returns {{ name: string, sub: string | null }}
+ */
+function where(g) {
+  const repo = g.repo;
+  if (!repo) return { name: "Git", sub: null };
+  if (repo.kind === "bare") return { name: repoName(repo.commonDir), sub: "bare" };
+  if (repo.kind === "submodule") return { name: repoName(repo.root), sub: "sub" };
+  if (repo.kind === "linked") return { name: repoName(repo.commonDir), sub: base(repo.root) };
+  return { name: repoName(repo.root), sub: null };
+}
+
+/**
+ * HEAD against the base branch, unless HEAD is the base branch.
+ * @param {Git} g
+ * @returns {BaseDelta | null}
+ */
+function delta(g) {
+  const d = g.insight?.base, b = g.head.branch;
+  if (!d || isBaseBranch(b, d.ref)) return null;
+  return d;
+}
+
+/** @param {string} ref "origin/main" → "main" */
+const shortBase = (ref) => ref.replace(/^[^/]+\//, "");
+
+/**
+ * Agents whose terminals are in this worktree (a worktree nested inside it keeps its own).
+ * @param {Git} g
+ * @returns {{ here: PaneInfo[], all: Map<string, PaneInfo[]> }}
+ */
+function agentsHere(g) {
+  const root = g.repo?.root;
+  const paths = g.refs.worktrees.filter((w) => !w.bare).map((w) => w.path);
+  if (root && !paths.some((p) => samePath(p, root))) paths.push(root);
+  const all = agentsFor(g, paths);
+  const key = paths.find((p) => samePath(p, root));
+  return { here: key ? all.get(key) ?? [] : [], all };
+}
 
 /**
  * The state dot's color: no repo, conflicts, dirty, clean.
@@ -120,10 +169,9 @@ function lineDetail(g, t) {
   const line = h_flex().h(15).pl(25).gap(5).items_center().text_size(11).min_w(0);
   if (!repo) return line.child(div().flex_1().min_w(0).truncate().text_color(t.dim)
     .child(g.loading ? "" : "cd into a repo in this tab"));
-  const name = repoName(repo.kind === "bare" ? repo.commonDir : repo.root);
-  const kind = repo.kind === "linked" ? "worktree" : repo.kind === "submodule" ? "sub" : null;
+  const { name, sub } = where(g);
   line.child(div().flex_none().max_w(96).truncate().font_medium().text_color(t.muted).child(name))
-    .when(Boolean(kind), (e) => e.child(div().flex_none().px(3).h(13).flex().items_center().rounded(3).bg(t.raised).text_size(9).text_color(t.muted).child(kind)))
+    .when(Boolean(sub), (e) => e.child(div().flex_none().max_w(80).truncate().px(3).h(13).flex().items_center().rounded(3).bg(t.raised).text_size(9).text_color(t.muted).child(sub)))
     .child(div().flex_none().text_color(t.dim).child("·"));
   if (dirty && s) {
     const { add, del } = changeTotals(s);
@@ -150,24 +198,37 @@ function chip(text, color, icon = null) {
 }
 
 /**
- * Line three: where it syncs to, the latest tag and how far past it, stashes, the commit count.
+ * Line three: where it syncs to, then where it stands against the base branch
+ * (or, on the base branch itself, the latest tag and how far past it).
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element}
  */
 function lineSync(g, t) {
   const line = h_flex().h(15).pl(25).gap(5).items_center().text_size(10.5).min_w(0);
-  const s = g.status, refs = g.refs, ins = g.insight;
+  const s = g.status, refs = g.refs, d = delta(g);
   if (!g.repo) return line;
   const up = s?.upstream;
-  const stashes = refs.stashes.length;
   return line
     .child(div().flex_1().min_w(0).truncate()
       .when(Boolean(up), (e) => e.text_color(t.dim).child(`⟶ ${up}`))
       .when(!up && g.repo.kind !== "bare", (e) => e.italic().text_color(alpha(t.dim, "bb")).child("local only")))
-    .when(Boolean(refs.tag), (e) => e.child(chip(refs.tagSince ? `${refs.tag} +${refs.tagSince}` : refs.tag, t.ansi3, "tag")))
-    .when(stashes > 0, (e) => e.child(chip(String(stashes), t.ansi5, "stash")))
-    .when(Boolean(ins?.total), (e) => e.child(div().flex_none().text_size(10).text_color(t.dim).child(plural(ins.total, "commit"))));
+    .when(Boolean(refs.tag) && !d, (e) => e.child(chip(refs.tagSince ? `${refs.tag} +${refs.tagSince}` : refs.tag, t.ansi3, "tag")))
+    .when(Boolean(d), (e) => e.child(baseMark(d, t)));
+}
+
+/**
+ * "↑3 ↓12 main": commits the base lacks, and base commits this worktree lacks.
+ * @param {BaseDelta} d
+ * @param {Theme} t
+ * @returns {Element}
+ */
+function baseMark(d, t) {
+  return h_flex().flex_none().gap(3).items_center().text_size(10).tooltip(`Against ${d.ref}: ${d.ahead} ahead, ${d.behind} behind`)
+    .when(d.ahead > 0, (e) => e.child(div().text_color(t.ansi2).child(`↑${compact(d.ahead)}`)))
+    .when(d.behind > 0, (e) => e.child(div().text_color(t.blocked).child(`↓${compact(d.behind)}`)))
+    .when(!d.ahead && !d.behind, (e) => e.child(div().text_color(alpha(t.ansi2, "bb")).child("=")))
+    .child(div().text_color(t.dim).child(shortBase(d.ref)));
 }
 
 /**
@@ -330,16 +391,18 @@ function railActivity(g, t) {
 }
 
 /**
- * Stashes: the icon and the count.
+ * Against the base branch: its name, ahead over behind, dimmer than the upstream's.
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element | null}
  */
-function railStash(g, t) {
-  const n = g.refs.stashes.length;
-  if (!n) return null;
-  return h_flex().flex_none().gap(2).items_center().text_color(t.ansi5)
-    .child(svg(ICON("stash")).size(9)).child(div().text_size(9.5).child(compact(n)));
+function railBase(g, t) {
+  const d = delta(g);
+  if (!d || (!d.ahead && !d.behind)) return null;
+  return v_flex().flex_none().items_center().text_size(9)
+    .child(div().text_color(t.dim).child(shortBase(d.ref).slice(0, 4)))
+    .when(d.ahead > 0, (e) => e.child(div().text_color(alpha(t.ansi2, "cc")).child(`↑${compact(d.ahead)}`)))
+    .when(d.behind > 0, (e) => e.child(div().text_color(alpha(t.blocked, "cc")).child(`↓${compact(d.behind)}`)));
 }
 
 /**
@@ -373,7 +436,7 @@ function railAge(g, t) {
  * The rail (narrow sidebar): the glyph, ringed while it glows, and under it a
  * column of small marks: an operation in progress, ahead/behind, the changes as
  * an upright bar with their count, lines added/removed, two weeks of activity,
- * stashes, the tag and the last commit's age. Marks with nothing to say are
+ * ahead/behind the base branch, the tag and the last commit's age. Marks with nothing to say are
  * left out. Hovering shows the strip's lines as a card; a click opens the full view.
  * @param {Git} g
  * @param {Theme} t
@@ -386,7 +449,7 @@ function rail(g, t) {
       .opacity(on ? 1 : 0).transition("opacity", on ? GLOW_IN : GLOW_OUT))
     .child(glyph(g, t));
   const marks = g.repo
-    ? [railOp(g, t), railSync(g, t), railChanges(g, t), railDelta(g, t), railActivity(g, t), railStash(g, t), railTag(g, t), railAge(g, t)]
+    ? [railOp(g, t), railSync(g, t), railChanges(g, t), railDelta(g, t), railActivity(g, t), railBase(g, t), railTag(g, t), railAge(g, t)]
     : [];
   const leaving = g.switching;
   const column = v_flex().id("git-rail").w(36).flex_none().items_center().gap(8).py(8).rounded(9).cursor_pointer()
@@ -421,23 +484,19 @@ function button(id, icon, tip, act, t) {
 }
 
 /**
- * Repo name, kind, upstream or tag, and the graph and refresh buttons.
+ * Repo name, the worktree's folder, upstream or tag, and the graph and refresh buttons.
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element}
  */
 function head(g, t) {
-  const repo = g.repo, s = g.status;
-  const name = repo ? repoName(repo.kind === "bare" ? repo.commonDir : repo.root) : "Git";
-  const kind = repo?.kind === "linked" ? "worktree" : repo?.kind === "main" ? null : repo?.kind;
-  const where = s?.upstream ? `⟶ ${s.upstream}` : g.refs.tag ?? "";
-  const stashes = g.refs.stashes.length;
+  const s = g.status;
+  const { name, sub } = where(g);
+  const to = s?.upstream ? `⟶ ${s.upstream}` : g.refs.tag ?? "";
   return h_flex().h(HEAD).flex_none().px(12).gap(6).items_center().text_size(11.5)
     .child(div().flex_none().max_w(110).truncate().font_semibold().text_color(t.muted).child(name))
-    .when(Boolean(kind), (e) => e.child(div().flex_none().px(4).h(14).flex().items_center().rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child(kind)))
-    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(where))
-    .when(stashes > 0, (e) => e.child(h_flex().flex_none().gap(2).items_center().text_size(10.5).text_color(t.ansi5)
-      .child(svg(ICON("stash")).size(10)).child(String(stashes))))
+    .when(Boolean(sub), (e) => e.child(div().flex_none().max_w(90).truncate().px(4).h(14).flex().items_center().rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child(sub)))
+    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(to))
     .child(button("git-graph", svg(ICON("branch")).size(12), "Commit graph (ctrl-shift-g)", openFull, t))
     .child(button("git-refresh", g.loading ? svg(ICON("spinner")).size(12).spin(900) : svg(ICON("refresh")).size(12), "Refresh", (cx) => g.refresh(cx), t));
 }
@@ -484,87 +543,6 @@ function age(at, t) {
   if (d < DAY) return { color: t.muted, opacity: 1 };
   if (d < 30 * DAY) return { color: t.dim, opacity: 1 };
   return { color: t.dim, opacity: 0.55 };
-}
-
-/**
- * The branch's tracking state as a color.
- * @param {Branch} b
- * @param {Theme} t
- * @returns {Color}
- */
-function trackColor(b, t) {
-  if (b.gone) return t.ansi1;
-  if (b.behind > 0) return t.blocked;
-  if (b.ahead > 0) return t.ansi2;
-  if (b.upstream) return alpha(t.ansi2, "55");
-  return t.border;
-}
-
-/**
- * @param {Git} g
- * @param {Branch} b
- * @param {Theme} t
- * @returns {Element}
- */
-function branchRow(g, b, t) {
-  const elsewhere = b.worktree && !samePath(b.worktree, g.repo?.root) ? base(b.worktree) : null;
-  const old = age(b.at, t);
-  return railed(h_flex().id(`br-${b.name}`).h(SEC_ROW).flex_none().pl(24).pr(8).gap(6).items_center().text_size(12).rounded(6)
-    .hover((st) => st.bg(t.hover)).cursor_pointer().tooltip(b.subject || b.name)
-    .on_click(() => openFull())
-    .child(div().flex_1().min_w(0).truncate().text_color(b.head ? t.accent : t.foreground).opacity(b.head ? 1 : Math.max(old.opacity, 0.75)).when(b.head, (e) => e.font_semibold()).child(b.name))
-    .when(Boolean(elsewhere), (e) => e.child(svg(ICON("worktree")).size(10).flex_none().text_color(t.dim)))
-    .when(b.ahead > 0, (e) => e.child(div().flex_none().text_size(10.5).text_color(t.ansi2).child(`↑${b.ahead}`)))
-    .when(b.behind > 0, (e) => e.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(`↓${b.behind}`)))
-    .when(b.gone, (e) => e.child(div().flex_none().text_size(10).text_color(t.ansi1).child("gone")))
-    .when(!b.upstream && !b.gone, (e) => e.child(div().flex_none().text_size(9.5).text_color(alpha(t.dim, "bb")).child("local")))
-    .child(div().w(24).flex_none().text_right().text_size(10.5).text_color(old.color).opacity(old.opacity).child(b.at ? ago(b.at) : "")),
-  b.head ? t.accent : trackColor(b, t));
-}
-
-/**
- * Opens a worktree: the space already showing it, else a new space there.
- * @param {Git} g
- * @param {Worktree} w
- */
-function openWorktree(g, w) {
-  const hit = spaces().find((s) => s.folder && samePath(s.folder, w.path) && (s.machine ?? null) === (g.on ?? null));
-  if (hit) run("space.select", { id: hit.id });
-  else run("space.new", { name: w.branch ?? base(w.path), folder: w.path, ...(g.on ? { machine: g.on } : {}) });
-}
-
-/**
- * @param {Git} g
- * @param {Worktree} w
- * @param {Theme} t
- * @returns {Element}
- */
-function worktreeRow(g, w, t) {
-  const here = samePath(w.path, g.repo?.root);
-  const color = here ? t.accent : w.prunable ? t.ansi1 : (w.dirty ?? 0) > 0 ? t.blocked : t.border;
-  return railed(h_flex().id(`wt-${w.path}`).h(SEC_ROW).flex_none().pl(24).pr(8).gap(6).items_center().text_size(12).rounded(6)
-    .hover((st) => st.bg(t.hover)).cursor_pointer().tooltip(w.path)
-    .on_click(() => openWorktree(g, w))
-    .child(div().flex_none().max_w(110).truncate().text_color(here ? t.foreground : t.muted).when(here, (e) => e.font_medium())
-      .child(w.branch ?? (w.head ? `@ ${w.head.slice(0, 7)}` : "?")))
-    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(base(w.path)))
-    .when((w.dirty ?? 0) > 0, (e) => e.child(div().flex_none().text_size(10.5).text_color(t.blocked).child(`${w.dirty}±`)))
-    .when(w.locked, (e) => e.child(div().flex_none().text_size(10).text_color(t.dim).child("locked")))
-    .when(w.prunable, (e) => e.child(div().flex_none().text_size(10).text_color(t.ansi1).child("missing"))),
-  color);
-}
-
-/**
- * @param {Stash} s
- * @param {Theme} t
- * @returns {Element}
- */
-function stashRow(s, t) {
-  return railed(h_flex().h(SEC_ROW).flex_none().pl(24).pr(8).gap(6).items_center().text_size(12)
-    .child(div().flex_none().text_size(10.5).text_color(t.ansi5).child(s.ref.replace(/^stash@/, "")))
-    .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(s.subject))
-    .child(div().w(24).flex_none().text_right().text_size(10.5).text_color(t.dim).child(s.at ? ago(s.at) : "")),
-  alpha(t.ansi5, "99"));
 }
 
 /**
@@ -624,47 +602,28 @@ function activity(g, t) {
 }
 
 /**
+ * This worktree's agents and commits, folded independently; with their natural height.
  * @param {Git} g
- * @param {string} name
- * @param {string} url
- * @param {Theme} t
- * @returns {Element}
- */
-function remoteRow(g, name, url, t) {
-  const up = g.status?.upstream?.startsWith(name + "/") ?? false;
-  return h_flex().id(`rm-${name}`).h(SEC_ROW).flex_none().pl(24).pr(8).gap(6).items_center().text_size(12).rounded(6)
-    .hover((st) => st.bg(t.hover)).tooltip(url)
-    .child(div().size(6).flex_none().rounded_full().bg(up ? t.ansi4 : alpha(t.ansi4, "66")))
-    .child(div().flex_none().max_w(80).truncate().text_color(up ? t.foreground : t.muted).when(up, (e) => e.font_medium()).child(name))
-    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(shortRemote(url)));
-}
-
-/**
- * Commits, branches, worktrees, stashes and remotes, folded independently; with their natural height.
- * @param {Git} g
+ * @param {PaneInfo[]} agents the agents working in this worktree
  * @param {Theme} t
  * @returns {{ rows: Element[], height: number }}
  */
-function sections(g, t) {
+function sections(g, agents, t) {
   /** @type {Element[]} */
   const rows = [];
   let height = 0;
-  const branches = [...g.refs.branches].sort((a, b) => Number(b.head) - Number(a.head) || b.at - a.at);
-  const worktrees = g.refs.worktrees.filter((w) => !w.bare);
-  const ins = g.insight, remotes = Object.entries(g.refs.remotes);
+  const ins = g.insight;
   const commits = ins ? ins.incoming.length + ins.recent.length : 0;
+  const blocked = agents.some((a) => a.status === "blocked");
   /** @type {[string, string, number, Color, () => Element[]][]} */
   const list = [
+    ["agents", "Agents here", agents.length, blocked ? t.blocked : t.accent,
+      () => agents.map((a, i) => div().h(SEC_ROW).flex_none().pl(18).pr(2).flex().items_center().child(agentRow(a, t, `sb-ag-${i}`)))],
     ["commits", "Commits", commits, ins?.incoming.length ? t.blocked : ins?.recent.some((c) => c.unpushed) ? t.ansi2 : t.accent,
       () => [...ins.incoming.map((c) => commitRow(c, "incoming", t)), ...ins.recent.map((c, i) => commitRow(c, i === 0 ? "head" : "recent", t))]],
-    ["branches", "Branches", branches.length, t.accent, () => branches.slice(0, 40).map((b) => branchRow(g, b, t))],
-    ["worktrees", "Worktrees", worktrees.length, t.blocked, () => worktrees.map((w) => worktreeRow(g, w, t))],
-    ["stashes", "Stashes", g.refs.stashes.length, t.ansi5, () => g.refs.stashes.slice(0, 20).map((s) => stashRow(s, t))],
-    ["remotes", "Remotes", remotes.length, t.ansi4, () => remotes.map(([name, url]) => remoteRow(g, name, url, t))],
   ];
   for (const [id, label, count, color, make] of list) {
-    // One checkout and no stashes say nothing: leave those sections out.
-    if (!count || (id === "worktrees" && count < 2 && g.repo?.kind !== "bare")) continue;
+    if (!count) continue;
     rows.push(sectionHead(g, id, label, count, color, t));
     height += SEC_HEAD;
     if (g.folded[id]) continue;
@@ -673,6 +632,34 @@ function sections(g, t) {
     height += items.length * SEC_ROW;
   }
   return { rows, height };
+}
+
+/**
+ * The other worktrees in one row: how many, how many dirty, agents blocked and
+ * working. A click opens the overview. Null with a single checkout.
+ * @param {Git} g
+ * @param {Map<string, PaneInfo[]>} agents by worktree
+ * @param {Theme} t
+ * @returns {Element | null}
+ */
+function summaryRow(g, agents, t) {
+  const list = g.refs.worktrees.filter((w) => !w.bare);
+  if (list.length < 2 && g.repo?.kind !== "bare") return null;
+  // refs has no dirty count for this worktree (it has the full status): take it from there.
+  const rows = list.map((w) => (samePath(w.path, g.repo?.root) ? { ...w, dirty: dirtyCount(g.status) } : w));
+  const sum = totals(rows, agents);
+  return h_flex().id("git-worktrees").h(SUMMARY - 8).mx(12).mb(8).px(10).gap(7).flex_none().items_center().rounded(8).cursor_pointer()
+    .bg(t.surface).border_1().border_color(sum.blocked > 0 ? alpha(t.blocked, "55") : t.border)
+    .hover((st) => st.border_color(alpha(t.accent, "55"))).tooltip("All worktrees (ctrl-shift-g)")
+    .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+    .on_click((_e, cx) => { cx.stop_propagation(); openFull(); })
+    .child(svg(ICON("worktree")).size(12).flex_none().text_color(t.muted))
+    .child(div().flex_none().text_size(11.5).font_medium().text_color(t.foreground).child(plural(sum.count, "worktree")))
+    .child(h_flex().flex_1().min_w(0).gap(6).items_center().text_size(10.5)
+      .when(sum.dirty > 0, (e) => e.child(div().flex_none().text_color(t.blocked).child(`${sum.dirty} dirty`)))
+      .when(sum.blocked > 0, (e) => e.child(div().flex_none().text_color(t.blocked).font_medium().child(`${sum.blocked} blocked`)))
+      .when(sum.working > 0, (e) => e.child(div().flex_none().text_color(t.accent).child(`${sum.working} working`))))
+    .child(svg(ICON("chevron-right")).size(11).flex_none().text_color(t.dim));
 }
 
 /**
@@ -696,8 +683,11 @@ function body(g, t) {
   if (card) { parts.push(card); height += g.repo.kind === "bare" ? 34 + 10 : g.statusCardHeight(); }
   const act = activity(g, t);
   if (act) { parts.push(act); height += ACTIVITY; }
-  const sec = sections(g, t);
+  const { here, all } = agentsHere(g);
+  const sec = sections(g, here, t);
   if (sec.rows.length) { parts.push(v_flex().px(6).pb(6).children(sec.rows)); height += sec.height + 6; }
+  const sum = summaryRow(g, all, t);
+  if (sum) { parts.push(sum); height += SUMMARY; }
   return { parts, height };
 }
 
