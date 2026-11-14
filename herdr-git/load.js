@@ -1,8 +1,8 @@
 // Reads repository state with git, no herdr imports: each loader gets a
 // `git(args)` already bound to the repo's folder and machine. Parsers are pure.
-import { norm, join, base, samePath } from "./paths.js";
+import { norm, join, base, samePath, resolve } from "./paths.js";
 
-/** @import { Repo, RunIn, ReadFile, Status, NumStat, Ref, Commit, Branch, Worktree, Stash, Operation, RefsState, RecentCommit, Insight } from "./types" */
+/** @import { Repo, RunIn, ReadFile, Status, NumStat, Ref, Commit, Branch, Worktree, Stash, Operation, RefsState, RecentCommit, Insight, WorktreeSummary } from "./types" */
 
 // Reads write nothing under .git (no index refresh, lock or fsmonitor
 // cookie), so the folder watch never sees our own reads.
@@ -235,13 +235,13 @@ export async function loadRefs(repo, git, gitAt) {
   // A bare repo's own entry is "checked out" nowhere: drop worktreepath that is the repo itself.
   for (const b of branches) if (b.worktree && samePath(b.worktree, repo.commonDir)) b.worktree = null;
   const worktrees = wt.code === 0 ? parseWorktrees(wt.stdout) : [];
-  // Dirty counts for the other checkouts (a few, in parallel).
-  await Promise.all(worktrees.filter((w) => !w.bare && !w.prunable && !samePath(w.path, repo.root)).slice(0, 8).map(async (w) => {
+  // Dirty counts for the other checkouts (a few at a time).
+  await pool(worktrees.filter((w) => !w.bare && !w.prunable && !samePath(w.path, repo.root)).slice(0, MAX_WORKTREES), async (w) => {
     try {
       const r = await gitAt(w.path, ["status", "--porcelain", "-z", "--untracked-files=no"]);
       if (r.code === 0) w.dirty = r.stdout.split("\0").filter(Boolean).length;
     } catch { /* unreachable folder: leave unknown */ }
-  }));
+  });
   return {
     branches, worktrees,
     stashes: st.code === 0 ? parseStashes(st.stdout) : [],
@@ -249,6 +249,133 @@ export async function loadRefs(repo, git, gitAt) {
     tag: described?.tag ?? null,
     tagSince: described?.since ?? 0,
   };
+}
+
+/** Worktrees read per refresh, at most; and how many at once. */
+export const MAX_WORKTREES = 40;
+const PARALLEL = 4;
+
+/**
+ * Runs `fn` over `items`, `limit` at a time.
+ * @template T
+ * @param {T[]} items
+ * @param {(item: T) => Promise<void>} fn
+ * @param {number} [limit]
+ * @returns {Promise<void>}
+ */
+export async function pool(items, fn, limit = PARALLEL) {
+  let next = 0;
+  const worker = async () => { while (next < items.length) await fn(items[next++]); };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/**
+ * The branch worktrees are compared with: `git config herdr.base`, else the
+ * remote's default branch, else main, master or trunk. Null when none resolves.
+ * @param {RunIn} git
+ * @returns {Promise<string | null>}
+ */
+export async function loadBase(git) {
+  /** @param {string[]} args */
+  const out = (args) => git(args).then((r) => (r.code === 0 ? r.stdout.trim() : ""), () => "");
+  const set = await out(["config", "--get", "herdr.base"]);
+  if (set) return set;
+  const remote = await out(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  if (remote) return remote;
+  for (const name of ["main", "master", "trunk"]) if (await out(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])) return name;
+  return null;
+}
+
+/**
+ * A linked worktree's `.git` file ("gitdir: …") → its own git dir. Null when it isn't one.
+ * @param {string | null} text
+ * @param {string} wtPath the worktree, which a relative gitdir is resolved against
+ * @returns {string | null}
+ */
+export function parseGitFile(text, wtPath) {
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(text ?? "");
+  return m ? resolve(m[1], wtPath) : null;
+}
+
+/**
+ * `rev-list --left-right --count base...HEAD` → commits only on base (behind) and only on HEAD (ahead).
+ * @param {string} text
+ * @returns {{ behind: number, ahead: number } | null}
+ */
+export function parseLeftRight(text) {
+  const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(text);
+  return m ? { behind: +m[1], ahead: +m[2] } : null;
+}
+
+/**
+ * The branch is the base branch (or the local twin of a remote one).
+ * @param {string | null} branch
+ * @param {string | null} baseRef
+ * @returns {boolean}
+ */
+export const isBaseBranch = (branch, baseRef) => Boolean(branch && baseRef && (baseRef === branch || baseRef.endsWith(`/${branch}`)));
+
+/**
+ * Everything the overview shows about one checkout. Every read falls back to empty.
+ * @param {Worktree} w
+ * @param {Repo} repo
+ * @param {string | null} baseRef
+ * @param {(path: string, args: string[]) => ReturnType<RunIn>} gitAt
+ * @param {ReadFile} read
+ * @returns {Promise<WorktreeSummary>}
+ */
+export async function loadWorktreeSummary(w, repo, baseRef, gitAt, read) {
+  /** @type {WorktreeSummary} */
+  const out = { ...w, gitDir: null, status: null, add: 0, del: 0, base: null, merged: false, fresh: false, tip: null, op: null, error: null };
+  if (w.bare || w.prunable) return out;
+  /** @param {string[]} args */
+  const run = (args) => gitAt(w.path, args).catch(/** @returns {import("./types").ExecResult} */ (e) => ({ code: -1, stdout: "", stderr: String(e?.message ?? e) }));
+  const gitFile = await Promise.resolve(read(join(w.path, ".git"))).catch(/** @returns {null} */ () => null);
+  // A main checkout's .git is a folder (reading it fails): its git dir is the shared one.
+  out.gitDir = parseGitFile(gitFile, w.path) ?? repo.commonDir;
+  const [st, num, lr, tip, op] = await Promise.all([
+    run(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal", "--no-renames"]),
+    run(["diff", "--numstat", "-z", "--no-renames", "HEAD"]),
+    baseRef ? run(["rev-list", "--left-right", "--count", `${baseRef}...HEAD`]) : Promise.resolve(null),
+    run(["log", "-1", "--format=%s%x1f%ct", "HEAD"]),
+    loadOperation({ ...repo, gitDir: out.gitDir }, read).catch(/** @returns {null} */ () => null),
+  ]);
+  if (st.code === 0) {
+    out.status = parseStatus(st.stdout);
+    const stats = parseNumstat(num.code === 0 ? num.stdout : "");
+    for (const s of Object.values(stats)) { out.add += s.add; out.del += s.del; }
+  } else out.error = st.stderr.trim() || "git status failed";
+  const counts = lr && lr.code === 0 ? parseLeftRight(lr.stdout) : null;
+  if (baseRef && counts) out.base = { ref: baseRef, ...counts };
+  out.tip = tip.code === 0 ? parseTip(tip.stdout) : null;
+  out.op = op;
+  out.merged = Boolean(out.base && !isBaseBranch(w.branch, baseRef) && out.base.ahead === 0 && out.status && dirtyCount(out.status) === 0);
+  // Nothing the base lacks also describes a branch nobody has committed to yet
+  // (an agent's new worktree). Its reflog has only the "branch: Created from" line.
+  if (out.merged) {
+    const log = await run(["reflog", "show", "-n", "2", "--format=%gs", `refs/heads/${w.branch}`]);
+    if (log.code === 0 && log.stdout.split("\n").filter(Boolean).length < 2) { out.merged = false; out.fresh = true; }
+  } else if (w.branch && out.base && !isBaseBranch(w.branch, baseRef) && out.base.ahead === 0) out.fresh = true;
+  return out;
+}
+
+/**
+ * Every checkout of the repo, summarised a few at a time.
+ * @param {Repo} repo
+ * @param {string | null} baseRef
+ * @param {RunIn} git
+ * @param {(path: string, args: string[]) => ReturnType<RunIn>} gitAt
+ * @param {ReadFile} read
+ * @returns {Promise<WorktreeSummary[]>}
+ */
+export async function loadOverview(repo, baseRef, git, gitAt, read) {
+  const wt = await git(["worktree", "list", "--porcelain", "-z"]);
+  if (wt.code !== 0) return [];
+  const list = parseWorktrees(wt.stdout).filter((w) => !w.bare).slice(0, MAX_WORKTREES);
+  /** @type {WorktreeSummary[]} */
+  const out = new Array(list.length);
+  await pool(list.map((w, i) => ({ w, i })), async ({ w, i }) => { out[i] = await loadWorktreeSummary(w, repo, baseRef, gitAt, read); });
+  return out;
 }
 
 /**
@@ -294,17 +421,20 @@ export function bucketDays(times, nowSec, days = 14) {
  * last two weeks' activity and the commit count. Every read falls back to empty.
  * @param {RunIn} git
  * @param {Status | null} status
+ * @param {string | null} [baseRef] the branch to count ahead/behind against
  * @returns {Promise<Insight>}
  */
-export async function loadInsight(git, status) {
+export async function loadInsight(git, status, baseRef = null) {
   /** @param {string[]} args */
   const out = (args) => git(args).then((r) => (r.code === 0 ? r.stdout : ""), () => "");
-  const [recent, incoming, times, total] = await Promise.all([
+  const [recent, incoming, times, total, lr] = await Promise.all([
     out(["log", "-n", "6", `--format=${RECENT_FORMAT}`, "HEAD"]),
     status?.behind ? out(["log", "-n", "4", `--format=${RECENT_FORMAT}`, "HEAD..@{u}"]) : Promise.resolve(""),
     out(["log", "--since=14.days.ago", "--format=%ct", "HEAD"]),
     out(["rev-list", "--count", "HEAD"]),
+    baseRef ? out(["rev-list", "--left-right", "--count", `${baseRef}...HEAD`]) : Promise.resolve(""),
   ]);
+  const counts = parseLeftRight(lr);
   const rec = parseRecent(recent);
   rec.forEach((c, i) => { c.unpushed = Boolean(status?.upstream) && i < (status?.ahead ?? 0); });
   return {
@@ -312,6 +442,7 @@ export async function loadInsight(git, status) {
     incoming: parseRecent(incoming),
     activity: bucketDays(lines(times).map(Number).filter(Boolean), Date.now() / 1000),
     total: Number(total.trim()) || 0,
+    base: baseRef && counts ? { ref: baseRef, ...counts } : null,
   };
 }
 
@@ -346,15 +477,16 @@ export async function loadOperation(repo, read) {
  * The commit list for the graph, newest first, with a pseudo-commit for uncommitted changes.
  * @param {Repo} repo
  * @param {RunIn} git
- * @param {{ all: boolean, oid: string | null, dirty: number, remotes: string[] }} opts
+ * @param {{ all: boolean, oid: string | null, dirty: number, remotes: string[], since?: string | null }} opts
+ *   since: show only commits HEAD has that this ref doesn't (wins over `all`)
  * @returns {Promise<Commit[]>}
  */
-export async function loadLog(repo, git, { all, oid, dirty, remotes }) {
+export async function loadLog(repo, git, { all, oid, dirty, remotes, since = null }) {
   /** @type {Commit[]} */
   let commits = [];
-  const wide = all || repo.kind === "bare";
+  const wide = !since && (all || repo.kind === "bare");
   if (oid || wide) {
-    const log = await git(["log", wide ? "--all" : "HEAD", "--topo-order", "-n", String(LIMIT),
+    const log = await git(["log", since ? `${since}..HEAD` : wide ? "--all" : "HEAD", "--topo-order", "-n", String(LIMIT),
       `--format=${RS}%H${US}%P${US}%an${US}%ae${US}%at${US}%D${US}%s`]);
     if (log.code === 0) commits = parseLog(log.stdout, remotes, oid);
   }
