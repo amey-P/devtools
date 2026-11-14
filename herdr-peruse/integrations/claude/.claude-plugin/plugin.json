@@ -1,7 +1,7 @@
 {
   "name": "herdr-peruse",
-  "version": "0.4.0",
-  "description": "Plan review and quick decisions in the Herdr app: when Claude exits plan mode inside Herdr, the plan opens beside it to annotate, approve or send back; when it asks a question (AskUserQuestion), the options open there to click. Outside Herdr, Claude's normal prompts show.",
+  "version": "0.5.0",
+  "description": "Read and annotate any markdown in the Herdr app: documents and long answers agents hand you, plans to approve, and quick decisions to click. Inside Herdr, Claude can show a long answer as a document, plans open beside it on ExitPlanMode, and AskUserQuestion opens as options. Outside Herdr, Claude's normal prompts show.",
   "author": {
     "name": "Amey Patil"
   }

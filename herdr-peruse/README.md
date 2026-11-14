@@ -1,18 +1,26 @@
 # herdr-peruse
 
-Review documents and agent plans natively in the [Herdr app](https://herdr.dev): a pane beside
-the agent to annotate, approve or send feedback. Agents can also ask **quick decisions**: options to click, answered in
-seconds. One repo, three install targets:
+Read and annotate any markdown natively in the [Herdr app](https://herdr.dev). A document opens beside your agent:
+comment on, delete or replace any block, click the options in its `choice` blocks, and send your notes to the agent
+(or save them beside the file when no agent is listening).
+
+- **You** open any file to read and annotate: `herdr-peruse open notes.md`, or the markdown viewer's Review button.
+- **Agents** hand you their long answers and open questions as a document instead of a wall of terminal text.
+- **Plans** open the same way when an agent leaves plan mode: approve them or send them back.
+- **Quick decisions** are options to click, answered in seconds.
+
+One repo, three install targets:
 
 | Path | Installs to | How |
 |---|---|---|
 | `mod/` | `$HERDR_APP_HOME/mods/peruse` (default `~/.config/herdr-app/mods/peruse`) | copied (or symlinked with `--link`) |
-| `mod-inbox/` | `$HERDR_APP_HOME/mods/peruse-inbox` (opens the review inbox) | the same way, with `mod/` |
+| `mod-inbox/` | `$HERDR_APP_HOME/mods/peruse-inbox` (opens the inbox) | the same way, with `mod/` |
 | `mod-settings/` | `$HERDR_APP_HOME/mods/peruse-settings` (opens the settings window) | the same way, with `mod/` |
+| `mod-compat/` | `$HERDR_APP_HOME/mods/review` (the old name: forwards to `peruse`) | the same way, with `mod/` |
 | `.claude-plugin/` + `integrations/claude/` | Claude Code marketplace `herdr-local`, plugin `herdr-peruse` | `claude plugin` CLI; Claude caches a copy per version |
 | `integrations/pi/` | pi package in `~/.pi/agent/settings.json` | `pi install`; loaded live from this repo |
 
-The Herdr mod is the hub. The Claude hooks, the `request-review` skill and the pi extension all
+The Herdr mod is the hub. The Claude hooks, the `peruse` skill and the pi extension all
 load `mods/peruse/bin/bridge.mjs` from the Herdr app folder, so install the `herdr` target first.
 
 ## Install
@@ -27,9 +35,9 @@ node install.mjs status           # exit 0 when everything is current
 
 ## Configure
 
-Reviews open as a **floating window** by default. Drag it by its header.
+Documents, plans and decisions open as a **floating window** by default. Drag it by its header.
 
-**Gentle arrivals.** A review an agent asks for never takes over the screen:
+**Gentle arrivals.** Anything an agent sends never takes over the screen (what you open yourself does):
 
 - On the agent's workspace it fades in where `window.place` says, and the keyboard stays where it was.
 - On another workspace nothing opens. A small **pill** slides in at the top of the window with a pulsing dot. Click
@@ -53,6 +61,38 @@ until you save or cancel it.
 Inside the pane, things ease in and out instead of popping: new notes and the editor fade in, the block toolbar
 appears softly on hover, the sidebar slides, the result card settles in once you decide, and a floating window
 fades out as it closes.
+
+## Read and annotate
+
+Open any markdown (or text) file yourself, from any terminal in Herdr:
+
+```sh
+herdr-peruse open notes.md                       # or: node install.mjs open notes.md
+node "$HERDR_APP_HOME/mods/peruse/bin/peruse.mjs" open notes.md --place right
+```
+
+It opens at once (where `window.place` says) and reloads when the file changes. Notes go to the agent in that tab
+(the header says `to Claude Code`; click it to switch when there are several). With **no agent in the tab**, the main
+button is **Save notes** (⌘↵): your notes are appended to `notes.md.notes.md` beside the file, under a timestamp. Herdr's
+markdown viewer has a **Review** button that opens a file the same way.
+
+**Done reading** (shown while you have no unsent notes) marks a document read: it leaves *Needs you* in the inbox.
+
+## Agent documents
+
+An agent can move a long answer, or a batch of questions that need context, out of the terminal into a document. It
+writes `.peruse/<date>-<slug>.md` in its working directory (kept out of git through `.git/info/exclude`), opens it,
+and replies in a line or two. You read it in Herdr, annotate, click its `choice` options, and **Send**: your notes
+arrive as the agent's next prompt. Or press **Done reading** if there's nothing to add.
+
+- **Claude Code**: the `peruse` skill. Claude uses it on its own for long answers and questions with context, or
+  when you ask to read or annotate something.
+- **pi**: the `peruse` tool (its prompt guidelines say when).
+- **Anything else**: `peruse.mjs <file> [--wait] [--title T]`. Without `--wait` it opens and exits, and the notes are
+  typed into that terminal later. With `--wait` it prints the notes (or `LGTM`) on stdout. Exit 2 dismissed, 3 not in Herdr.
+
+A document arrives gently, like a plan (below): a pill if you're on another workspace, or the inbox if you set
+**When a review arrives → Wait in the inbox**. Publishing the same file again replaces the earlier version.
 
 ## Quick decisions
 
@@ -89,15 +129,15 @@ A pick is sent with the rest of your feedback (`Decision: "…"` · `Picked: …
 
 ## Review inbox
 
-`ctrl-shift-i` opens the **review inbox**, a floating window that lists every review from the last week:
+`ctrl-shift-i` opens the **inbox**, a floating window that lists everything from the last week:
 
-- **Needs you**: plans, asks and decisions an agent is waiting on (oldest first), then documents with unsent notes or
-  feedback not yet sent.
-- **Resolved**: approved, changes requested, answered, sent, dismissed, replaced.
+- **Needs you**: plans, asks and decisions an agent is waiting on (oldest first), then documents to read, with unsent notes or
+  nothing sent yet (*To read*).
+- **Resolved**: approved, changes requested, answered, sent, read, dismissed, replaced.
 
 Resubmitted versions fold into the newest one (`v3 · 3 versions`). Click a row, or press ↵, to reopen it where you
 left off. Each row has buttons to go to its agent, dismiss it while the agent waits, or discard it once it's done.
-↑↓ select, tab cycles All · Plans · Asks · Decisions, and Esc closes the inbox. A review whose agent is gone (killed without
+↑↓ select, tab cycles All · Docs · Plans · Asks · Decisions, and Esc closes the inbox. A review whose agent is gone (killed without
 cleaning up) shows as *Agent gone*. Discard it.
 
 To keep new reviews from popping up at all, set **When a review arrives → Wait in the inbox** in Settings
@@ -151,7 +191,7 @@ node install.mjs config edit                     # open config.json in $EDITOR
 node install.mjs config path
 ```
 
-Per session, `HERDR_PERUSE_PLACE=right` overrides `window.place`. Per review, so does `review.mjs --place …` (and the
+Per session, `HERDR_PERUSE_PLACE=right` overrides `window.place` (the old `HERDR_REVIEW_PLACE` still works). Per document, so does `peruse.mjs --place …` (and the
 pi tool's `place`). If a floating window can't open, the review falls back to a split, then a tab.
 
 `ctrl-shift-r` (the last agent reply) also follows `place`. `install herdr` rebinds it to
@@ -177,3 +217,17 @@ pi tool's `place`). If a floating window can't open, the review falls back to a 
 
 `node install.mjs uninstall [target]` removes the mod folder, the Claude plugin and marketplace,
 and the pi entry. Review history in `$HERDR_APP_HOME/data/peruse` is kept.
+
+## Migrating from herdr-review
+
+herdr-peruse was herdr-review. `node install.mjs install` (or the repo root's `install peruse`; `review` still works
+as a target name) moves everything over:
+
+- `data/review` → `data/peruse` (settings, drafts, replies; the settings file's `$schema` is repointed).
+- `mods/review-inbox` and `mods/review-settings` are removed. `mods/review` becomes a small shim: Herdr's markdown
+  viewer still opens `review`, and `mods/review/bin/{bridge,review,ask}.mjs` forward to `mods/peruse/bin` for agents
+  started before the rename.
+- keys.json bindings to `review`, `review-inbox` and `review.*` commands now name `peruse` (backup:
+  `keys.json.bak-peruse`).
+- The Claude plugin `herdr-review` is replaced by `herdr-peruse` (its skill `request-review` is now `peruse`), and pi's
+  entry is repointed (its `request_review` tool is now `peruse`). Restart Claude and pi sessions afterwards.

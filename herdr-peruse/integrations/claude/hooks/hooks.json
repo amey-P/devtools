@@ -1,5 +1,5 @@
 {
-  "description": "Herdr review: plans on ExitPlanMode's permission request, questions on AskUserQuestion's, and the last reply on Stop (inside herdr-app terminals only).",
+  "description": "Herdr peruse: plans on ExitPlanMode's permission request, questions on AskUserQuestion's, and the last reply on Stop (inside herdr-app terminals only).",
   "hooks": {
     "PermissionRequest": [
       {
