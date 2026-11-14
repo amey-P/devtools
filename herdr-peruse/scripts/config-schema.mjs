@@ -51,6 +51,7 @@ const DESC = {
   "prompts.feedback.intro": "{subject}: what was reviewed · {count}: e.g. \"3 pieces\".",
   "prompts.feedback.plan": "For a plan.", "prompts.feedback.reply": "For an agent's last reply.",
   "prompts.feedback.file": "For a file or an agent's review request. {name}: file name or title · {path}: file path.",
+  "prompts.feedback.doc": "For a document an agent published for you to read (a long answer, a write-up). {name}: file name or title · {path}: file path.",
   "prompts.feedback.sections": "Section headings, one per annotation.",
   "prompts.feedback.sections.on": "A comment. {quote}: the start of the annotated text.",
   "prompts.feedback.sections.decision": "A pick in a ```choice block. {quote}: its question.",

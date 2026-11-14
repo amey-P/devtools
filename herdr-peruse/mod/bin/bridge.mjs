@@ -1,13 +1,18 @@
 // Peruse bridge: agents and scripts ask the herdr-app `peruse` mod to show a document, a plan or questions.
 //
-// Kinds: plan (an agent's plan, from the Claude hook / pi submit_plan), ask (an agent ran bin/peruse.mjs),
+// Kinds: plan (an agent's plan, from the Claude hook / pi submit_plan),
+//        doc (an agent published a document for the person to read: bin/peruse.mjs <file>, pi's peruse tool),
+//        ask (an agent sent text on stdin to bin/peruse.mjs),
 //        choice (an agent asks the person to pick between options: Claude's AskUserQuestion, pi's ask_user, bin/ask.mjs),
-//        file and reply (opened by the person from Herdr; they don't go through this bridge).
+//        file (the person ran `peruse.mjs open <file>`: target null, opener "person"; Herdr's markdown viewer opens
+//        files without this bridge), reply (the last reply, opened from Herdr without this bridge).
 // Modes: decision (the caller waits for approve / deny) or send (feedback is typed into `target` later).
 //
 // Spool: <herdr-app home>/data/peruse/<id>/
 //   request.json   {id, kind, mode, agent, terminal, target, cwd, title, content, file, session, version, created, space, tab,
-//                   parent: {app, space_name, tab_name, name}, place, questions?}
+//                   parent: {app, space_name, tab_name, name}, place, questions?, opener?}
+//                  target null: send to the agent in the tab, if any (else notes are saved beside the file)
+//                  opener "person": opened by the person, so it opens at once and focused (never a pill or the inbox)
 //                  questions (choice): AskUserQuestion's shape, [{question, header, multiSelect, options: [{label, description, preview}]}]
 //   meta.json      {pane, tab} or {overlay}   where the review opened (a split / tab, or a floating window)
 // Arrival queue: <spool>/.float/<id>  every new review goes to the mod's launcher (mod.open peruse), which knows where the
@@ -17,9 +22,11 @@
 //                {pill: true}        the person is on another workspace: a pill at the top waits for them (mod/pill.js)
 //                {here: true, back}  a split / tab on the person's workspace: the bridge opens it, then gives focus
 //                                    back to pane `back`
+//                {direct: true}      opened by the person, as a split / tab: the bridge opens it and focuses it
 //   draft.json     the mod's unsent annotations
 //   seen.json      {opened_at, deferred_at}: when the person opened it / closed it to come back later (the mod writes it)
 //   decision.json  {decision: "approve" | "deny" | "dismissed", feedback, notes, at}   (the mod writes it)
+//                  doc / file (send mode): {decision: "read", at}  the person marked it read (Done reading)
 //                  choice: {decision: "answer", answers: {[question]: "Label" | "A, B" | "free text"}, notes?: {[question]: text}, at}
 //   cancelled      the caller stopped waiting (interrupted, or a newer request replaced this one)
 // Replies: <herdr-app home>/data/peruse/replies/<terminal>.json  {agent, text, at}  (agent hooks write it)
@@ -200,8 +207,9 @@ function answered(dir) {
 async function openPlaced(where, id, dir, kind, place, arrive) {
   // The launcher decides (it sees where the person is): a window, a toast, a pill, or "here" for a split / tab.
   const meta = await openViaLauncher(id, dir);
-  if (meta && !meta.here) return true;
-  // "here": open beside the agent without moving the person's focus. No answer: the old way (show and focus).
+  if (meta && !meta.here && !meta.direct) return true;
+  // "here": open beside the agent without moving the person's focus. "direct" (the person asked) or no answer: show
+  // and focus.
   const gentle = !!meta?.here;
   const props = gentle ? { id, gentle: true } : { id };
   if (place !== "tab" && where.entry?.pane) {
@@ -234,7 +242,7 @@ function cancel(dir, reason) {
   try { writeFileSync(join(dir, "cancelled"), reason); } catch {}
 }
 
-const TAB_NAMES = { plan: "Plan review", ask: "Peruse", choice: "Decision", file: "Peruse", reply: "Peruse" };
+const TAB_NAMES = { plan: "Plan review", ask: "Peruse", doc: "Peruse", choice: "Decision", file: "Peruse", reply: "Peruse" };
 
 // ---- choices -------------------------------------------------------------------
 
@@ -314,7 +322,8 @@ export function askChoice({ questions, agent = null, title, cwd, session, place,
  *  @property {string | null} [file]
  *  @property {string} [cwd]
  *  @property {string | null} [session]
- *  @property {string} [target]
+ *  @property {string | null} [target]  null: whoever is the agent in the tab when the person sends (default: the caller)
+ *  @property {"agent" | "person"} [opener]
  *  @property {Place} [place]
  *  @property {AbortSignal} [signal]
  *  @property {boolean} [handleSignals]
@@ -332,7 +341,7 @@ export function askChoice({ questions, agent = null, title, cwd, session, place,
  *   normal flow), or the review couldn't be opened.
  */
 export async function openReview({ kind = "plan", mode = "decision", agent = null, content, title, file = null, cwd, session,
-  target, place, signal, handleSignals = false, questions }) {
+  target, opener = "agent", place, signal, handleSignals = false, questions }) {
   const terminal = process.env.HC_TERMINAL_ID;
   if (!terminal || !content?.trim()) return null;
   const lsr = await herdrApp(["ls"]);
@@ -344,8 +353,10 @@ export async function openReview({ kind = "plan", mode = "decision", agent = nul
 
   gc();
   const cfg = loadConfig({ place });
-  // A resubmission replaces the open review of the same terminal and kind.
-  const earlier = earlierFor(terminal, kind);
+  // A resubmission replaces the open review of the same terminal and kind. Documents and files are versions of each
+  // other only when they're the same file: an agent can publish several docs, and the person can open several files.
+  const perFile = kind === "doc" || kind === "file";
+  const earlier = earlierFor(terminal, kind).filter((p) => !perFile || (file && p.req.file === file));
   for (const p of earlier.filter((p) => !p.done)) { cancel(p.dir, "replaced"); await closePane(p.dir); }
   const version = earlier.filter((p) => (session ? p.req.session === session : true)).length + 1;
 
@@ -353,7 +364,7 @@ export async function openReview({ kind = "plan", mode = "decision", agent = nul
   const dir = join(SPOOL, id);
   mkdirSync(dir, { recursive: true });
   const request = {
-    id, kind, mode, agent, terminal, target: target ?? terminal, cwd: cwd ?? process.cwd(),
+    id, kind, mode, agent, terminal, target: target === null ? null : target ?? terminal, opener, cwd: cwd ?? process.cwd(),
     title: title || (file ? basename(file) : docTitle(content, kind === "plan" ? "Plan" : "Review")),
     content, file, session: session ?? null, version, created: Date.now(), space: where.space.id, tab: where.tab.id,
     // Who asked: shown in the review's header, and kept for when that agent is gone.

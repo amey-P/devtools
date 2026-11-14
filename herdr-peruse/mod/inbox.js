@@ -21,7 +21,12 @@ import { SETTINGS_WINDOW } from "./settings.js";
  *  @import { Color, Element, Context, AsyncContext, KeyEvent } from "gpui-kit" */
 
 const WEEK = 7 * 86400e3;
-const FILTERS = [["all", "All"], ["plan", "Plans"], ["ask", "Asks"], ["choice", "Decisions"]];
+const FILTERS = [["all", "All"], ["docs", "Docs"], ["plan", "Plans"], ["ask", "Asks"], ["choice", "Decisions"]];
+/** Documents to read: what agents published (doc), files the person opened, and send-mode asks.
+ *  @param {ReviewRequest} req @returns {boolean} */
+const isDoc = (req) => req.kind === "doc" || req.kind === "file" || (req.kind === "ask" && req.mode === "send");
+/** Whether a review shows under filter `f`. @param {ReviewRecord} r @param {string} f @returns {boolean} */
+const inFilter = (r, f) => f === "all" || (f === "docs" ? isDoc(r.req) : (r.req.kind ?? "plan") === f && !(f === "ask" && isDoc(r.req)));
 /** What each state shows: a label, the color of its bar and dot, pulsing while an agent waits. */
 /** @type {Record<ReviewState, { label: string; color: (t: Theme) => Color; pulse?: boolean }>} */
 const STATE = {
@@ -33,6 +38,7 @@ const STATE = {
   answered: { label: "Answered", color: (t) => green(t) },
   changes: { label: "Changes requested", color: (t) => t.accent },
   sent: { label: "Sent", color: (t) => green(t) },
+  read: { label: "Read", color: (t) => green(t) },
   dismissed: { label: "Dismissed", color: (t) => t.dim },
   replaced: { label: "Replaced", color: (t) => t.dim },
   interrupted: { label: "Agent stopped waiting", color: (t) => t.dim },
@@ -129,7 +135,7 @@ export class Inbox {
   }
 
   get visible() {
-    return this.filter === "all" ? this.items : this.items.filter((r) => (r.req.kind ?? "plan") === this.filter);
+    return this.items.filter((r) => inFilter(r, this.filter));
   }
 
   // ---- actions ---------------------------------------------------------------
@@ -224,7 +230,7 @@ export class Inbox {
     const color = waiting ? t.blocked : t.accent;
     /** @param {string} f @param {string} label @returns {Element} */
     const chip = (f, label) => {
-      const n = f === "all" ? this.items.length : this.items.filter((r) => (r.req.kind ?? "plan") === f).length;
+      const n = this.items.filter((r) => inFilter(r, f)).length;
       const on = this.filter === f;
       return h_flex().id(`inbox-f-${f}`).h(24).px(8).gap(5).items_center().rounded(6).text_size(12).font_medium().cursor_pointer()
         .text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.background).shadow_sm())
@@ -265,7 +271,7 @@ export class Inbox {
     const ic = p?.icon
       ? (p.tint ? svg(p.icon).size(16).flex_none().text_color(/** @type {Color} */ (p.color ?? t.foreground)) : image(p.icon).w(16).h(16).flex_none())
       : div().w(16).h(16).rounded(4).bg(tint(t.accent, "55")).flex_none();
-    const kind = req.kind === "plan" ? "PLAN" : req.kind === "choice" ? "DECISION" : req.mode === "send" ? "DOC" : "ASK";
+    const kind = req.kind === "plan" ? "PLAN" : req.kind === "choice" ? "DECISION" : req.kind === "file" ? "FILE" : req.mode === "send" || req.kind === "doc" ? "DOC" : "ASK";
     const deferred = r.seen?.deferred_at && r.needsYou;
     const fresh = r.needsYou && !r.seen?.opened_at;
     const time = r.needsYou ? `${r.state === "pending" ? "waiting " : ""}${ago(req.created)}` : ago(r.at);
@@ -292,7 +298,7 @@ export class Inbox {
             .bg(tint(t.accent, "26")).text_color(t.accent).child("NEW"))))
         .child(h_flex().gap(6).items_center().text_size(this.sz(11.5)).text_color(t.dim).min_w(0)
           .child(dot(c, !!st.pulse, 6))
-          .child(div().flex_none().text_color(r.needsYou ? c : t.dim).child(st.label))
+          .child(div().flex_none().text_color(r.needsYou ? c : t.dim).child(r.state === "open" && isDoc(req) ? "To read" : st.label))
           .children(meta.flatMap((m) => [sub("·"), div().min_w(0).truncate().child(m)]))
           .when(r.notes > 0, (el) => el.child(sub("·")).child(h_flex().flex_none().gap(3).items_center().child(icon("comment", 10)).child(String(r.notes))))
           .when(!!deferred, (el) => el.child(sub("·")).child(sub(`put off ${ago(r.seen.deferred_at)}`)))))
@@ -306,6 +312,7 @@ export class Inbox {
   }
 }
 
-/** Requests of one agent and kind (and session, when it has one) are versions of each other.
+/** Requests of one agent and kind (and session, when it has one) are versions of each other; documents and files
+ *  only when they're the same file (bin/bridge.mjs replaces them the same way).
  *  @param {ReviewRequest} req @returns {string} */
-const groupKey = (req) => `${req.terminal}|${req.kind ?? "plan"}|${req.session ?? ""}`;
+const groupKey = (req) => `${req.terminal}|${req.kind ?? "plan"}|${req.session ?? ""}${req.kind === "doc" || req.kind === "file" ? `|${req.file ?? req.id}` : ""}`;

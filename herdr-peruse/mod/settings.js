@@ -32,6 +32,8 @@ const PROMPTS = [
     ["prompts.feedback.reply.subject", "Subject for an agent reply", ""],
     ["prompts.feedback.file.heading", "Heading for a file or request", "{name}: the file name, or the review's title"],
     ["prompts.feedback.file.subject", "Subject for a file or request", "{path}: the file path, or the title in quotes · {name}"],
+    ["prompts.feedback.doc.heading", "Heading for an agent's document", "A long answer or write-up the agent sent you to read. {name}: the file name, or its title"],
+    ["prompts.feedback.doc.subject", "Subject for an agent's document", "{path}: the file path, or the title in quotes · {name}"],
   ]],
   ["Feedback sections", [
     ["prompts.feedback.sections.on", "A comment", "{quote}: the start of the annotated text"],

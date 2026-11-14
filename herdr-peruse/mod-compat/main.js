@@ -3,6 +3,7 @@
 // file}}), and so do key bindings from before the rename. This copy hands its props to "peruse" and closes itself:
 //   as an overlay (mod.open {name: "review"})   opens the peruse launcher instead
 //   as a pane (pane.split {mod: "review", …})   splits a peruse pane off this one with the same props, then closes this one
+// bin/ forwards the old script paths (bridge.mjs, review.mjs, ask.mjs) to mods/peruse/bin for agents started before.
 import { View, div } from "gpui-kit";
 import { props, panes, run, closeOverlay } from "herdr";
 

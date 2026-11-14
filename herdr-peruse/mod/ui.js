@@ -302,7 +302,7 @@ export const openInboxAction = { name: "mod.open", args: { name: "peruse-inbox" 
  *  @param {{ gentle?: boolean }} extra @returns {Promise<string>} */
 export async function openReviewWindow(id, req, cfg, extra = {}) {
   const overlay = openOverlay({ kind: "window", mod: "peruse", props: { id, float: true, ...extra },
-    key: `review-${safe(req?.terminal ?? id)}`, width: cfg.window.width, height: cfg.window.height });
+    key: `peruse-${safe(req?.terminal ?? id)}`, width: cfg.window.width, height: cfg.window.height });
   await fs.writeFile(`${spool()}/${id}/meta.json`, JSON.stringify({ overlay, pane: null })).catch(() => {});
   return overlay;
 }
@@ -326,7 +326,7 @@ export async function openReviewPlaced(id, req, cfg, { gentle = false } = {}) {
 
 /** Where review `id` stands, from its spool files (see bin/bridge.mjs):
  *  pending (an agent waits for a decision) · draft (send mode, unsent notes) · open (send mode, nothing unsent)
- *  · approved · changes · answered (a choice) · sent · dismissed · replaced · interrupted. Null when it has no request.
+ *  · approved · changes · answered (a choice) · sent · read (Done reading) · dismissed · replaced · interrupted. Null when it has no request.
  *  @param {string} id @returns {Promise<ReviewRecord | null>} */
 export async function readReview(id) {
   const dir = `${spool()}/${id}`;
@@ -340,6 +340,7 @@ export async function readReview(id) {
   let state;
   if (decision?.decision === "approve") state = "approved";
   else if (decision?.decision === "answer") state = "answered";
+  else if (decision?.decision === "read") state = "read";
   else if (decision?.decision === "deny") state = req.mode === "send" ? "sent" : "changes";
   else if (decision?.decision === "dismissed") state = "dismissed";
   else if (cancelled) state = cancelled === "replaced" ? "replaced" : "interrupted";
