@@ -44,6 +44,13 @@ const FRAMING = [
   "- A low-stakes choice can go in the plan as a ```choice block with your pick noted, for the user to change while reviewing.",
   "- Don't guess past a real ambiguity. If an answer raises a new question, research it before you ask again.",
   "",
+  "Principles",
+  "- Plan from facts: anything the plan relies on, you've checked. Say where.",
+  "- Stay in scope: other problems you find are proposals, not steps.",
+  "- Checks leave no trace: never test against the user's real state.",
+  "- Git discipline: start from a clean tree (ask before committing or stashing what isn't yours), work on a branch, never the default one, and commit each phase once its check passes. If a check fails and the fix isn't obvious, roll back to the last good commit rather than piling fixes on top. Destructive steps are exact and reversible: name the SHAs, create a backup ref first, use --force-with-lease, and write down the rollback.",
+  "- Done is demonstrable: leave it ready for the user to try. For a UI, open it for them (e.g. herdr-app do mod.open …). For anything that runs in a terminal, open a Herdr pane (herdr-app do pane.split or tab.new) already set up to try it. Say plainly what wasn't verified.",
+  "",
   "Get the plan reviewed before you submit it",
   "- Reviewers: subagent with agent \"reviewer\", pointed at the plan file. Ask it to check the plan against the code for wrong assumptions, missed files or callers, phases that are too big or can't be verified, and risky steps.",
   "- Fix what holds up, and note what you rejected under Review. If the review raises something only the user can decide, ask it as above.",
@@ -97,11 +104,12 @@ const FRAMING = [
 ].join("\n");
 const APPROVED = [
   "Plan approved. Plan mode is over: implement the plan in {path} now, starting with Phase 0, and go phase by phase without waiting for the user in between.",
-  "- Never push, force-push or rewrite history. Don't commit the plan or the handoff file unless the project keeps plans in git.",
+  "- Follow the plan's Principles while implementing.",
+  "- Never push, force-push or rewrite history unless the approved plan says to. Don't commit the plan or the handoff file unless the project keeps plans in git.",
   "- A phase is done when its verification passes. Then commit it with the message the plan gives.",
   "- If the repo no longer matches the plan's \"Starting point\" (new uncommitted changes, a different branch), stop and ask.",
   "- If a check fails and the fix stays inside the phase, fix it. If the fix would change the plan (another approach, files the plan doesn't list, a new decision), stop. Leave no broken commit, and report what failed with options and a recommendation.",
-  "- When every phase is done, write a short handoff next to the plan: the commits per phase, what was verified and how, and anything to check by hand. Then call request_review on it with wait=false, so it waits in the user's review inbox until they're free."
+  "- When every phase is done, write a short handoff next to the plan: the commits per phase, what was verified and how, and anything to check by hand. Then call request_review on it with wait=false, so it waits in the user's review inbox until they're free. Finally, open the demo for the user: the app, or a Herdr pane set up to try it."
 ].join("\n");
 const PLAN_OFF = "Plan mode is over. You may now edit files and run commands normally.";
 /** Fills {tool} / {path} in a fallback text, as the bridge does for the settings' text. */
