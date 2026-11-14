@@ -34,7 +34,7 @@
 // Settings (⚙ in the header, settings.js): the window, the look (ui.*) and what the agent is told (prompts.*), saved to
 // <app home>/data/review/config.json; every open review re-reads it when it changes (watchConfig).
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, ScrollHandle } from "gpui-base";
 import * as fs from "fs/promises";
 import {
   props, theme, settings, agents, panes, focused, appHome, home, exec, hc, notify, nextCommand, watchFolder, readTextFile,
@@ -45,6 +45,7 @@ import { toMarkdown, ordered } from "./feedback.js";
 import {
   AGENT_NAMES, base, safe, green, tint, clip, readJson, plural, ago, readConfig, stopPress, store, icon, wash, dot, badge, btn,
   spool, isReviewId, openReviewWindow, openInboxAction, scaler, withFont, fillText, Appear, fadeIn, chevron, SOFT, QUICK,
+  ENTER, EXIT, SPRING, SPRING_SNAPPY, rise, stagger, glow, glowPhase,
 } from "./ui.js";
 import { Inbox } from "./inbox.js";
 import { Settings } from "./settings.js";
@@ -75,8 +76,6 @@ const KINDS = {
 };
 const WIDE = 940;
 const PILL = { width: 340, height: 40 };
-/** @type {import("./types").Motion} */
-const ENTER = { duration: 240, easing: "ease-out" };
 
 export default class Review extends View {
   /** @param {import("gpui-shell").Props | undefined} _props @param {import("gpui-kit").AsyncContext} cx */
@@ -106,6 +105,10 @@ export default class Review extends View {
     this.appear = new Appear(cx); // entrances (ui.js)
     this.leaving = false;         // a floating window fading out before it closes
     this.h = cx.focus_handle();
+    // Scroll positions held by the view, not the frame: an overflow_y_scrollbar() area without a handle
+    // loses its position whenever the view re-renders (any click or note), so each one tracks a handle.
+    this.docScroll = ScrollHandle.new();
+    this.sideScroll = ScrollHandle.new();
     if (!this.gentle) this.h.focus();  // now, so Esc closes the window even while it loads
     // A person-launched review (no spool request): what to show, and where its draft lives.
     this.launch = !this.id && (p.kind === "file" || p.kind === "reply") ? { kind: p.kind, file: expand(p.file ?? null), on: p.on ?? null } : null;
@@ -256,7 +259,7 @@ export default class Review extends View {
       if (!acx) throw 0;
       this.leaving = true;
       acx.notify();
-      acx.timer.after(QUICK.duration + 20, () => closeOverlay(this.overlay));
+      acx.timer.after(EXIT.duration + 20, () => closeOverlay(this.overlay));
     } catch { closeOverlay(this.overlay); }
   }
 
@@ -868,13 +871,15 @@ export default class Review extends View {
     if (this.settingsWindow) return withFont(div().size_full(), this.settingsWindow.saved).child(this.settingsWindow.render(theme()));
     if (this.inbox) return this.inbox.render(cx);
     const t = theme();
-    const shown = !this.leaving && (!this.gentle || this.appear.is("root"));
+    // A floating (or quietly arrived) window drops in on a spring; leaving, it lifts away fast (ease-in).
+    const enters = this.gentle || this.floating;
+    const shown = !this.leaving && (!enters || this.appear.is("root"));
     const root = withFont(v_flex(), this.cfg).id("review").relative().track_focus(this.h).size_full().bg(t.canvas).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 1) { this.width = size.width; cx.notify(); } })
       .on_key_down((e, cx) => this.onKey(e, cx))
       // Fades in when it arrived on its own, and out as a floating window closes.
-      .opacity(shown ? 1 : 0).transition("opacity", this.leaving ? QUICK : ENTER)
-      .when(this.gentle, (el) => el.top(shown ? 0 : 10).transition("top", ENTER))
+      .opacity(shown ? 1 : 0).transition("opacity", this.leaving ? EXIT : ENTER)
+      .when(enters, (el) => el.top(this.leaving ? -6 : shown ? 0 : 12).spring("top", this.leaving ? SPRING_SNAPPY : SPRING))
       // Clicks that land outside text and the editor give the keyboard back to the review.
       .on_mouse_down("left", () => this.h.focus());
     // The frame (header, ✕) draws straight away; only the body waits for load().
@@ -886,14 +891,14 @@ export default class Review extends View {
     const wide = this.width >= WIDE;
     const side = this.showSide;
     if (this.settings) return root.child(this.renderHeader(t))
-      .child(fadeIn(div().flex_1().min_h(0), this.appear.is("settings"), 4).child(this.settings.render(t)));
+      .child(fadeIn(div().flex_1().min_h(0), this.appear.is("settings"), 6, SOFT, { spring: SPRING_SNAPPY }).child(this.settings.render(t)));
     // The sidebar stays drawn and slides: its width eases between 0 and its own.
     const sw = this.cfg?.ui?.sidebarWidth ?? 320;
     const drawer = div().id("pr-side-drawer").flex_none().h_full().overflow_hidden().w(side ? sw : 0).transition("width", SOFT)
       .child(this.renderSide(t));
     return root
       .child(this.renderHeader(t))
-      .child(fadeIn(h_flex().flex_1().min_h(0), this.appear.is("body"), 6)
+      .child(fadeIn(h_flex().flex_1().min_h(0), this.appear.is("body"), 8, SOFT, { spring: SPRING_SNAPPY, delay: 40 })
         // A floating window drags by its header only: presses in the body stay here.
         .when(this.floating, (el) => el.on_mouse_down("left", (_e, cx) => { this.h.focus(); cx.stop_propagation(); }))
         .child(this.renderDoc(t))
@@ -1016,10 +1021,11 @@ export default class Review extends View {
     const n = this.anns.length;
     const g = green(t);
     const shown = this.approveMenu && this.appear.is("approve-menu");
+    let nth = 0; // rows cascade in just after the panel
     /** One menu row. `k`: its keystroke, when it has one; `mode`: what approve(cx, mode) gets.
      *  @param {string} id @param {string} ic @param {import("gpui-kit").Color} color @param {string} title
      *  @param {string} sub @param {string | null} k @param {"notes" | "discard"} mode */
-    const item = (id, ic, color, title, sub, k, mode) => h_flex().id(id).gap(10).px(10).py(8).items_start().rounded(7).cursor_pointer()
+    const item = (id, ic, color, title, sub, k, mode) => fadeIn(h_flex().id(id), shown, 4, SOFT, { spring: SPRING_SNAPPY, delay: 50 + stagger(nth++, 45) }).gap(10).px(10).py(8).items_start().rounded(7).cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { this.approveMenu = false; this.approve(cx, mode); })
       .child(div().pt(1).text_color(color).child(icon(ic, 14)))
@@ -1027,8 +1033,8 @@ export default class Review extends View {
         .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(title))
         .child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(sub)))
       .when(!!k, (el) => el.child(div().pt(1).text_size(10.5).text_color(t.dim).child(k)));
-    return v_flex().id("pr-approve-list").mt(4).w(280).p(4).gap(2).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
-      .opacity(shown ? 1 : 0).transition("opacity", QUICK)
+    // Drops 6px into place on a spring with a green halo that blooms and fades (glow sits behind, as a sibling).
+    const list = v_flex().id("pr-approve-list").w_full().p(4).gap(2).rounded(10).bg(t.popover).border_1().border_color(t.border).shadow_lg()
       // The menu has the keyboard while it's open: ⌘⇧↵ again approves with the notes.
       .on_key_down((e, cx) => {
         const k = e.keystroke.replace(/^ctrl-/, "cmd-");
@@ -1039,6 +1045,9 @@ export default class Review extends View {
       .child(div().mx(8).h(1).bg(t.border))
       .child(item("pr-am-discard", "trash", t.muted, `${okLabel}, discard ${plural(n, "note")}`,
         "Your notes are dropped and not sent.", null, "discard"));
+    const phase = this.approveMenu ? glowPhase(this.appear, "approve-menu", 220) : 0;
+    return rise(v_flex().mt(4).w(280), shown, { dy: -6, policy: QUICK })
+      .child(glow(g, phase, { radius: 10, inset: 1 })).child(list);
   }
 
   /** Who asked for this review (or who feedback goes to), and where that agent is. Click: go to it. */
@@ -1076,7 +1085,7 @@ export default class Review extends View {
     /** A small meta chip. @param {string} ic @param {string} text @returns {import("gpui-kit").Element} */
     const meta = (ic, text) => h_flex().gap(5).items_center().flex_none().child(icon(ic, 11)).child(text);
     if (!general.length && !editingGeneral) this.appear.forget("general-card");
-    return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar()
+    return div().id("pr-doc").relative().flex_1().min_w(0).h_full().overflow_y_scrollbar().track_scroll(this.docScroll)
       .child(div().absolute().top(0).left(0).right(0).h(220).child(wash(tint(t.accent, "12"), tint(t.canvas, "00"), 180)))
       .child(v_flex().relative().w_full().max_w(this.cfg?.ui?.contentWidth ?? 860).mx_auto().px(narrow ? 10 : 28).pt(narrow ? 12 : 26).pb(110).gap(14)
         .when(!open, (el) => el.child(this.renderResult(t)))
@@ -1155,7 +1164,7 @@ export default class Review extends View {
       : d.reason === "replaced" ? [t.dim, "pencil", "Replaced", `A newer ${plan ? "version of this plan" : this.choice ? "question" : "review request"} replaced this review.`]
       : d.decision === "dismissed" ? [t.dim, "x", "Closed", "Closed without a decision."]
       : [t.dim, "x", "No longer waiting", this.error ?? "The agent stopped waiting for this review."]);
-    return fadeIn(h_flex(), this.appear.is("result"), 8, { duration: 280, easing: "ease-out" }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
+    return fadeIn(h_flex(), this.appear.is("result"), 12, ENTER, { spring: SPRING }).gap(16).items_center().px(20).py(18).rounded(14).bg(t.background)
       .border_1().border_color(tint(color, "66")).shadow_md()
       .child(wash(tint(color, "26"), tint(t.background, "00"), 90))
       .child(div().relative().w(44).h(44).flex_none()
@@ -1210,10 +1219,12 @@ export default class Review extends View {
     const tbKey = `tb-${i}`;
     const tbShown = hover && !editingHere ? this.appear.is(tbKey) : (this.appear.forget(tbKey), false);
     const tbTop = heading ? 6 : 2;
-    const toolbar = h_flex().absolute().top(tbShown ? tbTop : tbTop - 3).right(4).h(28).px(3).gap(1).items_center().rounded(8)
-      .opacity(tbShown ? 1 : 0).transition("opacity", QUICK).transition("top", QUICK)
+    // Springs down into place (a tiny settle) while its three actions cascade in left to right.
+    const toolbar = h_flex().absolute().top(tbShown ? tbTop : tbTop - 5).right(4).h(28).px(3).gap(1).items_center().rounded(8)
+      .opacity(tbShown ? 1 : 0).transition("opacity", QUICK).spring("top", SPRING_SNAPPY)
       .bg(t.popover).border_1().border_color(t.border).shadow_md()
-      .children(["comment", "delete", "replace"].map((k) => h_flex().id(`tb-${k}-${i}`).h(22).px(7).gap(5).items_center().rounded(5)
+      .children(["comment", "delete", "replace"].map((k, ki) => h_flex().id(`tb-${k}-${i}`)
+        .opacity(tbShown ? 1 : 0).transition("opacity", { ...QUICK, delay: tbShown ? 30 + ki * 30 : 0 }).h(22).px(7).gap(5).items_center().rounded(5)
         .text_size(this.sz(11.5)).font_medium().cursor_pointer().text_color(k === "delete" ? t.blocked : t.muted)
         .hover((s) => s.bg(t.hover).text_color(k === "delete" ? t.blocked : t.foreground))
         .on_click((_e, cx) => this.startEdit(i, /** @type {"comment" | "delete" | "replace"} */ (k), cx))
@@ -1299,7 +1310,9 @@ export default class Review extends View {
     const e = this.editing;
     const color = this.color(e.type, t);
     const partial = e.block !== null && e.quote && e.quote !== this.blocks[e.block]?.src;
-    return fadeIn(v_flex().id("pr-editor"), this.appear.is(`editor-${e.seq}`), 4).gap(10).p(14).rounded(12).bg(t.popover).border_1().border_color(color).shadow_lg()
+    // Springs up into place with a halo in the annotation colour that blooms and fades (a sibling behind it).
+    const ek = `editor-${e.seq}`;
+    const editor = v_flex().id("pr-editor").gap(10).p(14).rounded(12).bg(t.popover).border_1().border_color(color).shadow_lg()
       // The editor keeps its presses: the textarea holds the keyboard while it's open.
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .child(h_flex().gap(8).items_center()
@@ -1317,6 +1330,8 @@ export default class Review extends View {
         .child(btn("pr-e-cancel", t, { label: "Cancel", kbd: "esc", onClick: (cx) => this.cancelEdit(cx) }))
         .child(btn("pr-e-save", t, { label: e.type === "delete" ? "Mark for deletion" : "Save", variant: "solid",
           color: e.type === "delete" ? t.blocked : t.solid, kbd: "⌘↵", onClick: (cx) => this.saveEdit(cx) })));
+    return fadeIn(v_flex(), this.appear.is(ek), 8, SOFT, { spring: SPRING })
+      .child(glow(color, glowPhase(this.appear, ek, 240), { radius: 12, inset: 1 })).child(editor);
   }
 
   /** The annotations sidebar: tabs, per-type stats, and the notes list or the markdown preview.
@@ -1350,7 +1365,7 @@ export default class Review extends View {
         .when(this.width < WIDE, (el) => el.child(btn("pr-side-close", t, { ic: "x", tooltip: "Hide", onClick: (cx) => this.toggleSide(cx) }))))
       .when(this.sideTab === "notes" && list.length > 0, (el) => el.child(h_flex().flex_none().gap(6).px(10).pt(10)
         .child(stat("comment")).child(stat("delete")).child(stat("replace")).child(stat("general"))))
-      .child(div().id("pr-side-list").flex_1().min_h(0).overflow_y_scrollbar()
+      .child(div().id("pr-side-list").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.sideScroll)
         .child(this.sideTab === "preview" ? this.renderPreview(t) : this.renderList(list, t)));
   }
 

@@ -13,11 +13,8 @@ import * as fs from "fs/promises";
 import { theme, focused, watchFolder, closeOverlay, run } from "herdr";
 import {
   AGENT_NAMES, readJson, readConfig, readReview, isReviewId, spool, dot, icon, tint, stopPress, clip, openReviewPlaced,
-  openInboxAction, withFont, Appear,
+  openInboxAction, withFont, Appear, ENTER, EXIT, SPRING, glowPhase, wash,
 } from "./ui.js";
-
-/** @type {import("./types").Motion} */
-const ENTER = { duration: 280, easing: "ease-out" };
 
 export class Pill {
   /** `overlay`: this frameless window's id (closes it), null when constructed without one.
@@ -30,6 +27,10 @@ export class Pill {
     this.loaded = false;
     this.appear = new Appear(cx); // the bar draws once hidden, then the native transition brings it in
     this.closing = false;
+    this.leaving = false; // the bar is animating out before the window closes
+    /** @type {ReviewRecord | null} */
+    this.last = null;     // the record last drawn: the leaving bar keeps showing it
+    this.w = 0;           // measured window width: the bar grows from a narrower width to it (a scale-in)
     this.cfg = null;
     this.busy = false;
     cx.spawn(async (cx) => {
@@ -81,7 +82,14 @@ export class Pill {
   closeWindow() {
     if (this.closing || !this.overlay) return;
     this.closing = true;
-    closeOverlay(this.overlay);
+    // The bar (still drawn from `last`) lifts away and fades, then the window goes.
+    const acx = this.appear.acx;
+    try {
+      if (!acx || !this.last) throw 0;
+      this.leaving = true;
+      acx.notify();
+      acx.timer.after(EXIT.duration + 20, () => closeOverlay(/** @type {string} */ (this.overlay)));
+    } catch { closeOverlay(this.overlay); }
   }
 
   close() {}
@@ -106,35 +114,52 @@ export class Pill {
    *  @param {Context} cx */
   render(cx) {
     const t = theme();
-    const r = this.items[0];
-    const root = div().id("pill-root").size_full().relative();
+    const r = this.items[0] ?? (this.leaving ? this.last : null);
+    const root = div().id("pill-root").size_full().relative()
+      .on_size_change((size, cx) => { if (Math.abs(size.width - this.w) > 1) { this.w = size.width; cx.notify(); } });
     if (!r) return root;
+    this.last = r;
     const who = AGENT_NAMES[r.req.agent] ?? AGENT_NAMES[r.req.parent?.app] ?? "An agent";
     const what = r.req.kind === "plan" ? `Plan from ${who}` : r.req.kind === "choice" ? `${who} asks you to decide` : `${who} asks for a review`;
     const where = [r.req.parent?.space_name, r.req.parent?.tab_name].filter(Boolean).join(" › ");
     const more = this.items.length - 1;
     const color = r.req.kind === "plan" ? t.accent : t.ansi3 ?? t.accent;
 
-    const shown = this.appear.is("bar");
-    const bar = h_flex().id("pill").absolute().left(0).top(shown ? 0 : -10).w_full().h(36)
-      .opacity(shown ? 1 : 0).transition("opacity", ENTER).transition("top", ENTER)
-      .pl(14).pr(6).gap(10).items_center().rounded_full()
+    // Entrance: drops in from above on a spring (a small overshoot), widening from a narrower bar to full width
+    // (a scale-in from the centre), while an accent flash blooms inside and settles; the content resolves just after
+    // the shell lands. Exit: a quick ease-in lift and fade.
+    const shown = this.appear.is("bar") && !this.leaving;
+    const phase = this.leaving ? 2 : glowPhase(this.appear, "bar", 320);
+    const inset = shown ? 0 : 18;
+    const exitPol = this.leaving ? EXIT : null;
+    /** @param {import("gpui-kit").Element} el @param {number} delay */
+    const late = (el, delay) => el.opacity(shown ? 1 : 0).transition("opacity", exitPol ?? { ...ENTER, delay });
+    const bar = h_flex().id("pill").absolute().top(shown ? 1 : -14)
+      .when(this.w > 0, (el) => el.left(inset).w(Math.max(0, this.w - inset * 2)).spring("left", SPRING).spring("width", SPRING))
+      .when(!this.w, (el) => el.left(0).w_full())
+      .h(36).opacity(shown ? 1 : 0).transition("opacity", exitPol ?? ENTER)
+      .spring("top", SPRING)
+      .overflow_hidden().pl(14).pr(6).gap(10).items_center().rounded_full()
       .bg(t.popover).border_1().border_color(tint(color, "66")).shadow_md()
       .text_color(t.foreground).cursor_pointer()
       .hover((s) => s.bg(t.hover).border_color(color))
       .on_mouse_down("left", stopPress)
       .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => { await this.open(r, false); if (!this.done()) cx.notify(); }); })
       .tooltip(more ? `Open the newest review (${more} more in the inbox, ctrl-shift-i)` : "Open the review")
-      .child(dot(color, true, 7))
-      .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(5).text_size(12.5)
+      // Accent flash: blooms bright as the bar lands, then settles to a faint ambient wash.
+      .child(div().absolute().top(0).left(0).size_full().opacity(phase === 0 ? 0 : phase === 1 ? 1 : 0.35)
+        .transition("opacity", phase === 2 ? { duration: 900, easing: "ease-out" } : { duration: 160, easing: "ease-out" })
+        .child(wash(tint(color, "40"), tint(color, "00"))))
+      .child(late(div().flex_none(), 40).child(dot(color, true, 7)))
+      .child(late(h_flex().flex_1().min_w(0).overflow_hidden().gap(5).text_size(12.5), 90)
         .child(div().flex_none().font_medium().child(clip(what, 34)))
         .when(!!where, (el) => el.child(div().min_w(0).truncate().text_color(t.muted).child(`· ${where}`))))
-      .when(more > 0, (el) => el.child(div().id("pill-more").flex_none().h(20).px(7).rounded_full()
+      .when(more > 0, (el) => el.child(late(div(), 140).id("pill-more").flex_none().h(20).px(7).rounded_full()
         .flex().items_center().text_size(11).font_medium().bg(tint(color, "24")).text_color(color)
         .on_mouse_down("left", stopPress)
         .on_click((_e, cx) => { cx.stop_propagation(); run(openInboxAction.name, openInboxAction.args); })
         .child(`+${more}`)))
-      .child(div().id("pill-later").flex_none().w(24).h(24).rounded_full().flex().items_center().justify_center()
+      .child(late(div(), 170).id("pill-later").flex_none().w(24).h(24).rounded_full().flex().items_center().justify_center()
         .text_color(t.dim).hover((s) => s.bg(t.selected).text_color(t.foreground))
         .tooltip("Later: wait in the review inbox")
         .on_mouse_down("left", stopPress)
