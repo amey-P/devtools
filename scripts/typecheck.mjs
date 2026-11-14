@@ -2,7 +2,7 @@
 // Type-check every mod and the Node scripts with tsc (JSDoc types in plain .js; see tsconfig.mod.json).
 //
 //   npm run typecheck              every project
-//   npm run typecheck -- review    only projects whose name contains "review"
+//   npm run typecheck -- peruse    only projects whose name contains "peruse"
 //   npm run typecheck -- node      only the Node scripts (the root project)
 //   npm run typecheck -- --by-file [filter]   error counts per file instead of every error
 //
