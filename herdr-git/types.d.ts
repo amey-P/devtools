@@ -216,4 +216,35 @@ export interface Insight {
   activity: number[];
   /** Commits reachable from HEAD. */
   total: number;
+  /** HEAD against the base branch, null when there is none. */
+  base: BaseDelta | null;
+}
+
+/** A checkout against the base branch (loadBase()). */
+export interface BaseDelta {
+  /** The base branch, e.g. "origin/main". */
+  ref: string;
+  /** Commits on HEAD that the base doesn't have. */
+  ahead: number;
+  /** Commits on the base that HEAD doesn't have. */
+  behind: number;
+}
+
+/** One checkout as the worktree overview shows it (loadWorktreeSummary()). */
+export interface WorktreeSummary extends Worktree {
+  /** Its own git dir (…/.git/worktrees/<name>, or the shared one for the main checkout). */
+  gitDir: string | null;
+  status: Status | null;
+  /** Lines added and removed against HEAD, staged and not. */
+  add: number;
+  del: number;
+  base: BaseDelta | null;
+  /** On a branch with nothing the base lacks and a clean tree: done, safe to remove. */
+  merged: boolean;
+  /** No commits of its own yet (a branch just made for an agent), dirty or not. */
+  fresh: boolean;
+  tip: { subject: string; at: number } | null;
+  op: Operation | null;
+  /** Why it couldn't be read. */
+  error: string | null;
 }
