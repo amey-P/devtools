@@ -79,7 +79,7 @@ Notes:
 ### 4.2 Pre-flight (stop and ask the owner if any check fails)
 
 ```sh
-cd /Volumes/amey/Users/amey/workspace/devtools/herdr-app
+cd /Volumes/amey/Users/amey/workspace/devtools/agentctl
 test -n "$HC_TERMINAL_ID" && echo "orchestrator = $HC_TERMINAL_ID"   # you must run inside Herdr
 git status --short                     # must print nothing. Anything else → ask the owner, don't stash or commit it
 git branch --show-current              # main
@@ -104,8 +104,8 @@ main  (owner only; never touched)
 ```
 
 ```sh
-R=/Volumes/amey/Users/amey/workspace/devtools/herdr-app
-WT=/Volumes/amey/Users/amey/workspace/devtools/herdr-app-wt
+R=/Volumes/amey/Users/amey/workspace/devtools/agentctl
+WT=/Volumes/amey/Users/amey/workspace/devtools/agentctl-wt
 mkdir -p "$WT/_diffs"
 git -C "$R" worktree add -b tc/integrate "$WT/integrate" main
 # per project, when you start it (branch from the CURRENT tc/integrate, so it includes shared-type changes):

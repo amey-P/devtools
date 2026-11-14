@@ -1,4 +1,4 @@
-# herdr-app devtools for Windows: install every Herdr mod, layout and integration in this repo.
+# agentctl for Windows: install every Herdr mod, layout and integration in this repo.
 # The work happens in install.mjs (Node 18+); this clones the repo first when run on its own.
 #
 #   .\install.ps1 [command] [target] [agent]     same commands and targets as install.sh:
