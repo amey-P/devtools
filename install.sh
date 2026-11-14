@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# herdr-app devtools: install every Herdr mod, layout and integration in this repo
+# agentctl: install every Herdr mod, layout and integration in this repo
 # (macOS and Linux; on Windows use install.ps1). The work happens in install.mjs (Node 18+).
 #
 #   ./install.sh [command] [target] [agent]

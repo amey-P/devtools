@@ -1,6 +1,6 @@
-# herdr-app devtools
+# agentctl
 
-Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). They live in one repo and one script installs them on macOS, Linux or Windows.
+One repo for everything custom around my coding agents: mods, layouts and agent integrations for the [Herdr app](https://herdr.dev), the pi and Claude Code configs I wrote (statuslines, skills), and the herdr subagents MCP server. One script installs them on macOS, Linux or Windows.
 
 | Project | Installs | Into `$HERDR_APP_HOME` |
 |---|---|---|
@@ -10,13 +10,15 @@ Mods, layouts and agent integrations for the [Herdr app](https://herdr.dev). The
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
 | `herdr-review/` | Review mod, inbox and settings | `mods/review`, `mods/review-inbox`, `mods/review-settings` (see [its README](herdr-review/README.md)) |
 | *agents* (opt-in) | The coding-agent integrations: herdr-review's Claude Code plugin (hooks, skills) and pi extension | Claude Code's `herdr-local` marketplace, pi's settings |
+| `agents/` → *links* (opt-in) | pi powerline statusline extension, Claude Code statusline, custom skills (`explainer`, `git`), symlinked so edits apply at once | `~/.pi/agent/extensions/`, `~/.claude/statusline.sh`, `~/.agents/skills/` |
+| `herdr-subagents-mcp/` | Rust MCP server pi uses to spawn and steer herdr subagents (build with `cargo build --release`) | referenced from `~/.pi/agent/mcp.json` |
 
 `HERDR_APP_HOME` defaults to `~/.config/herdr-app`.
 
 ## Install
 
 ```sh
-git clone https://github.com/amey-P/devtools.git herdr-app && cd herdr-app
+git clone https://github.com/amey-P/devtools.git agentctl && cd agentctl
 ./install.sh                 # install everything
 ./install.sh install git     # or one target: git | minimal | sidebar | usage | review
 ./install.sh status          # ● current  ◐ differs/symlink  ○ missing; exit 0 when all current
@@ -24,6 +26,8 @@ git clone https://github.com/amey-P/devtools.git herdr-app && cd herdr-app
 ```
 
 **Agent integrations are opt-in.** `install` never touches Claude Code or pi configuration on its own. Opt in with `./install.sh install agents` (both, where `claude` / `pi` is on PATH) or `./install.sh install agents claude|pi`. After that, `./install.sh install` keeps the opted-in ones current, and `status` checks them (the rest show as "not opted in" and don't affect the exit code). `./install.sh uninstall agents [claude|pi]` opts out. Being installed is what counts as opted in, so there's no state file.
+
+**Agent configs are opt-in too.** `./install.sh install links` symlinks `agents/` into `~/.pi`, `~/.claude` and `~/.agents` (an existing real file is moved aside to `.bak`); `status links` and `uninstall links` work the same way. Unlike Herdr mods these load fine through a symlink, so there's nothing to re-sync. The list lives in `scripts/links.mjs`.
 
 You can also skip the clone:
 

@@ -1,5 +1,5 @@
 {
-  "name": "herdr-app-devtools",
+  "name": "agentctl",
   "private": true,
   "type": "module",
   "description": "Dev tooling for the Herdr mods in this repo. Not installed anywhere; see install.sh.",
