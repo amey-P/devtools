@@ -27,7 +27,7 @@ git clone https://github.com/amey-P/devtools.git agentctl && cd agentctl
 
 **Agent integrations are opt-in.** `install` never touches Claude Code or pi configuration on its own. Opt in with `./install.sh install agents` (both, where `claude` / `pi` is on PATH) or `./install.sh install agents claude|pi`. After that, `./install.sh install` keeps the opted-in ones current, and `status` checks them (the rest show as "not opted in" and don't affect the exit code). `./install.sh uninstall agents [claude|pi]` opts out. Being installed is what counts as opted in, so there's no state file.
 
-**Agent configs are opt-in too.** `./install.sh install links` symlinks `agents/` into `~/.pi`, `~/.claude` and `~/.agents` (an existing real file is moved aside to `.bak`); `status links` and `uninstall links` work the same way. Unlike Herdr mods these load fine through a symlink, so there's nothing to re-sync. The list lives in `scripts/links.mjs`.
+**Agent configs are opt-in too.** `./install.sh install links` symlinks `agents/` into `~/.pi`, `~/.claude` and `~/.agents` (an existing real file is moved to `~/.local/state/agentctl/backup/`, not beside it, where pi or the skill loader would still pick it up); `status links` and `uninstall links` work the same way. Unlike Herdr mods these load fine through a symlink, so there's nothing to re-sync. The list lives in `scripts/links.mjs`.
 
 You can also skip the clone:
 

@@ -2,10 +2,11 @@
 // places each coding agent reads them from, so edits in the repo apply at once.
 // Unlike Herdr mods these load fine through a symlink.
 //
-//   node install.mjs install links     create or re-point the links (an existing real file
-//                                      or folder is moved aside to <name>.bak first)
+//   node install.mjs install links     create or re-point the links (an existing real file or
+//                                      folder is moved to ~/.local/state/agentctl/backup/ first:
+//                                      a .bak beside it would still be loaded by pi or as a skill)
 //   node install.mjs status links      which links are in place
-//   node install.mjs uninstall links   remove the links (any .bak is left for you)
+//   node install.mjs uninstall links   remove the links (backups are left for you)
 //
 // Windows: folders become junctions (no admin needed); files need Developer Mode for a
 // symlink, so they're copied instead, with a warning.
@@ -13,12 +14,13 @@ import {
   copyFileSync, existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, symlinkSync, unlinkSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const H = homedir();
 const WIN = platform() === "win32";
+const BACKUP = join(H, ".local", "state", "agentctl", "backup");
 
 /** repo source → where the agent looks for it. @type {{ src: string, dst: string }[]} */
 export const LINKS = [
@@ -41,8 +43,9 @@ export function linkState({ src, dst }) {
 
 /** @param {string} dst */
 function moveAside(dst) {
-  let bak = `${dst}.bak`;
-  if (lstat(bak)) bak = `${dst}.bak-${Date.now()}`;
+  let bak = join(BACKUP, relative(H, dst));
+  if (lstat(bak)) bak = `${bak}-${Date.now()}`;
+  mkdirSync(dirname(bak), { recursive: true });
   renameSync(dst, bak);
   return bak;
 }
