@@ -25,7 +25,7 @@ function findMods(dir) {
   /** @type {string[]} */
   const out = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name.startsWith(".") || e.name === "node_modules") continue;
+    if (!e.isDirectory() || e.name.startsWith(".") || e.name === "node_modules" || e.name === "target") continue;
     const p = join(dir, e.name);
     if (existsSync(join(p, "tsconfig.json")) && existsSync(join(p, "main.js"))) out.push(p);
     out.push(...findMods(p));
