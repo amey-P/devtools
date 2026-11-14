@@ -54,8 +54,12 @@ if (result.decision === "approve") {
     behavior: "allow", updatedInput: hook.tool_input,
     updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }],
   });
-  // Claude's allow carries no message: queue the notes as the next prompt.
-  if (result.notes?.trim()) bridge.sendLater(process.env.HC_TERMINAL_ID, text.approvedWithNotes + result.notes.trim());
+  // Claude's allow carries no message: queue the beads steps and the notes as the next prompt.
+  const planFile = typeof hook.tool_input?.planFilePath === "string" ? hook.tool_input.planFilePath : "the approved plan";
+  const steps = (bridge.prompts?.({ path: planFile })?.claudeApproved ?? "").trim();
+  const notes = result.notes?.trim() ? text.approvedWithNotes + result.notes.trim() : "";
+  const next = [steps, notes].filter(Boolean).join("\n\n");
+  if (next) bridge.sendLater(process.env.HC_TERMINAL_ID, next);
 } else {
   out({ behavior: "deny", message: text.deny + (result.feedback ?? "").trim() });
 }
