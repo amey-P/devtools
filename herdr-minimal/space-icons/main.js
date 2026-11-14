@@ -5,7 +5,8 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaces, run, openOverlay, theme, window, appHome, readTextFile } from "herdr";
-import { iconFor, alpha } from "./glyphs.js";
+import { iconFor } from "./glyphs.js";
+import { GeoCache } from "./geocache.js";
 
 /** @import { Theme } from "./types" */
 /** @import { SpaceInfo } from "herdr" */
@@ -20,6 +21,8 @@ export default class SpaceIcons extends View {
    */
   init(_props, cx) {
     this.overrides = {};
+    this.geo = new GeoCache("space-icons");
+    this.geo.start(cx);
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(`${appHome()}/mods/space-icons/overrides.json`);
@@ -30,6 +33,7 @@ export default class SpaceIcons extends View {
       } catch (e) {
         console.log(`space-icons: overrides.json: ${e}`);
       }
+      await this.geo.load();
       cx.notify();
     });
   }
@@ -40,8 +44,9 @@ export default class SpaceIcons extends View {
    * @returns {import("gpui-kit").Element}
    */
   cell(s, t) {
-    const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = /** @type {import("gpui-kit").Color} */ (color.startsWith("#") ? color : (t[color] ?? t.accent));
+    const ic = iconFor(s.name, this.overrides);
+    // A pinned Lucide icon, else the geometric one once it's on disk (empty box until then).
+    const path = ic.glyph ? `mods/space-icons/icons/${ic.glyph}.svg` : this.geo.path(ic.seed, ic.family);
     const loud = LOUD.has(s.status);
     return h_flex()
       .id(`space-${s.id}`)
@@ -65,11 +70,11 @@ export default class SpaceIcons extends View {
           .rounded(10)
           .justify_center()
           .items_center()
-          .text_color(ink)
+          .text_color(s.active ? t.foreground : t.muted)
           .border_1()
-          .when(s.active, (el) => el.bg(alpha(ink, 0.24)).border_color(alpha(ink, 0.6)))
-          .when(!s.active, (el) => el.bg(alpha(ink, 0.12)).border_color(alpha(ink, 0)).hover((st) => st.bg(alpha(ink, 0.2))))
-          .child(svg(`mods/space-icons/icons/${glyph}.svg`).size(17))
+          .when(s.active, (el) => el.bg(t.selected).border_color(t.border))
+          .when(!s.active, (el) => el.bg(t.surface).border_color(t.surface).hover((st) => st.bg(t.hover).text_color(t.foreground)))
+          .child(path ? svg(path).size(17) : div().size(17))
           .when(loud, (el) => el.child(
             div().absolute().top(-3).right(-3).size(9).rounded(5).border_2().border_color(t.chrome).bg(t[s.status] ?? t.unknown)
               .when(s.status === "working", (d) => d.loop("opacity", { from: 0.35, to: 1, period: 1200 }))))

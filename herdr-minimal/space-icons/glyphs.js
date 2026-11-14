@@ -1,5 +1,7 @@
-// 64 distinct Lucide line icons (icons/<name>.svg, ISC) x 7 theme colors = 448 icons.
-// Order matters: changing either list reshuffles every space's icon. Append only.
+// 64 distinct Lucide line icons (icons/<name>.svg, ISC), used only when overrides.json pins one;
+// by default a space gets a seeded geometric icon (geo.js). Glyphs carry no color of their
+// own: the renderers ink them with the theme's neutral tokens.
+// Order matters: changing the list reshuffles every pinned index. Append only.
 
 export const GLYPHS = [
   "rocket", "cat", "dog", "fish", "bird", "turtle", "rabbit", "squirrel",
@@ -14,26 +16,10 @@ export const GLYPHS = [
 
 /** @import { Overrides, Icon } from "./types" */
 
-// Theme color names, looked up in theme() at render time so the rail follows
-// the applied theme (catppuccin: red, yellow, green, teal, blue, pink, mauve).
-export const COLORS = ["ansi1", "ansi3", "ansi2", "ansi6", "ansi4", "ansi5", "accent"];
-
-// 32-bit FNV-1a.
-/**
- * @param {string} text
- * @returns {number}
- */
-function fnv1a(text) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
-// A space's icon from its name. `overrides`: { "<lowercase name>": { glyph: index|name, color: index|theme name|"#hex" } }.
-// Returns { glyph: icon name, color: a theme color name or "#rrggbb" }.
+// A space's icon from its name: a seeded geometric mark (geo.js) by default.
+// `overrides`: { "<lowercase name>": { glyph?: index|name, seed?: string, family?: string } }.
+// `glyph` pins a Lucide icon instead; `seed` rerolls the geometric one; `family` forces its family.
+// Returns { glyph: Lucide name or null, seed, family }.
 /**
  * @param {string} name
  * @param {Overrides} [overrides]
@@ -41,17 +27,19 @@ function fnv1a(text) {
  */
 export function iconFor(name, overrides = {}) {
   const key = (name ?? "").trim().toLowerCase();
-  const h = fnv1a(key);
-  let glyph = GLYPHS[h % GLYPHS.length];
-  let color = COLORS[(h >>> 16) % COLORS.length];
+  /** @type {string | null} */
+  let glyph = null;
+  let seed = key;
+  /** @type {string | undefined} */
+  let family;
   const o = overrides[key];
   if (o) {
     if (typeof o.glyph === "number" && GLYPHS[o.glyph]) glyph = GLYPHS[o.glyph];
     else if (typeof o.glyph === "string" && GLYPHS.includes(o.glyph)) glyph = o.glyph;
-    if (typeof o.color === "number" && COLORS[o.color]) color = COLORS[o.color];
-    else if (typeof o.color === "string" && o.color) color = o.color;
+    if (typeof o.seed === "string" && o.seed.trim()) seed = o.seed;
+    if (typeof o.family === "string" && o.family) family = o.family;
   }
-  return { glyph, color };
+  return { glyph, seed, family };
 }
 
 // "#rrggbb" or "#rrggbbaa" at opacity `a` (0..1).

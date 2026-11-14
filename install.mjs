@@ -192,13 +192,13 @@ const SPEC = {
       replace: { command: "pane.split", args: { direction: "right", mod: "git" } } }],
   },
   minimal: {
-    mods: [{ name: "space-icons", src: "herdr-minimal/space-icons" }],
+    mods: [{ name: "space-icons", src: "herdr-minimal/space-icons", exclude: ["geo", "test"] }], // geo/: generated icons
     files: [
       { src: "herdr-minimal/layouts/minimal.json", dst: "layouts/minimal.json", label: "layouts/minimal.json" },
       { src: "herdr-minimal/layouts/minimal.svg", dst: "layouts/minimal.svg", label: "layouts/minimal.svg" },
     ],
   },
-  sidebar: { mods: [{ name: "space-tree", src: "herdr-sidebar/space-tree" }] },
+  sidebar: { mods: [{ name: "space-tree", src: "herdr-sidebar/space-tree", exclude: ["geo", "test"] }] }, // geo/: generated icons
   usage: {
     mods: [{ name: "agent-usage", src: "herdr-usage/agent-usage" }, { name: "usage-settings", src: "herdr-usage/usage-settings" }],
     bindings: [{ key: "ctrl-shift-u", cmd: { command: "mod.open", args: { name: "usage-settings" } } }],

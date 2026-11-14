@@ -12,6 +12,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, HoverCard } from "gpui-base";
 import { spaces, agents, panes, run, openOverlay, theme, window, appHome, readTextFile, setAgentOrder } from "herdr";
 import { iconFor, alpha } from "./glyphs.js";
+import { GeoCache } from "./geocache.js";
 
 /** @import { Theme, Overrides } from "./types" */
 /** @import { SpaceInfo, TabInfo, AgentInfo, PaneInfo, Status } from "herdr" */
@@ -45,6 +46,8 @@ export default class SpaceTree extends View {
     this.width = 248;
     /** @type {Overrides} */
     this.overrides = {};
+    this.geo = new GeoCache("space-tree");
+    this.geo.start(cx);
     /** @type {Record<string, boolean>} */
     this.open = {};
     try { this.open = JSON.parse(localStorage.getItem("open") ?? "{}") ?? {}; } catch { this.open = {}; }
@@ -58,6 +61,7 @@ export default class SpaceTree extends View {
       } catch (e) {
         console.log(`space-tree: overrides.json: ${e}`);
       }
+      await this.geo.load();
       cx.notify();
     });
   }
@@ -69,13 +73,20 @@ export default class SpaceTree extends View {
     cx.notify();
   }
 
+  // A space's glyph: a pinned Lucide icon, else its geometric icon once it's on
+  // disk (an empty box of the same size until then, so nothing shifts).
+  /** @param {import("./types").Icon} ic @param {number} size @returns {import("gpui-kit").Element} */
+  glyphEl(ic, size) {
+    const path = ic.glyph ? `mods/space-tree/icons/${ic.glyph}.svg` : this.geo.path(ic.seed, ic.family);
+    return path ? svg(path).size(size) : div().size(size);
+  }
+
   /** @param {SpaceInfo} s @param {Theme} t @param {number} size @returns {import("gpui-kit").Element} */
   icon(s, t, size) {
-    const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = color.startsWith("#") ? /** @type {import("gpui-kit").Color} */ (color) : (t[color] ?? t.accent);
+    const ic = iconFor(s.name, this.overrides);
     return h_flex().flex_none().size(size).rounded(Math.round(size * 0.3)).justify_center().items_center()
-      .text_color(ink).bg(alpha(ink, s.active ? 0.24 : 0.12))
-      .child(svg(`mods/space-tree/icons/${glyph}.svg`).size(Math.round(size * 0.6)));
+      .text_color(s.active ? t.foreground : t.muted).bg(s.active ? t.selected : t.surface)
+      .child(this.glyphEl(ic, Math.round(size * 0.6)));
   }
 
   /** @param {AgentInfo} a @param {Theme} t @param {number} [size] @param {string} [key] @returns {import("gpui-kit").Element} */
@@ -302,8 +313,7 @@ export default class SpaceTree extends View {
   /** @param {SpaceInfo} s @param {Theme} t @param {Map<string, AgentInfo[]>} byTab @param {PaneInfo[]} allPanes @returns {import("gpui-kit").Element} */
   rail(s, t, byTab, allPanes) {
     const on = s.active;
-    const { glyph, color } = iconFor(s.name, this.overrides);
-    const ink = color.startsWith("#") ? /** @type {import("gpui-kit").Color} */ (color) : (t[color] ?? t.accent);
+    const ic = iconFor(s.name, this.overrides);
     const rowH = on ? TILE + 8 : RAIL_ROW;
     const box = on ? TILE : GLYPH_BOX;
     const badge = !on && Boolean(s.status) && s.status !== "idle";
@@ -317,10 +327,10 @@ export default class SpaceTree extends View {
       .rounded(on ? 10 : 6)
       .justify_center().items_center()
       .cursor_pointer()
-      .text_color(on ? ink : alpha(ink, 0.6))
-      .when(on, (el) => el.bg(alpha(ink, 0.2)).border_1().border_color(alpha(ink, 0.45)).shadow_sm())
-      .when(!on, (el) => el.hover((st) => st.text_color(ink).bg(alpha(ink, 0.12)))), s)
-      .child(svg(`mods/space-tree/icons/${glyph}.svg`).size(on ? 19 : GLYPH))
+      .text_color(on ? t.foreground : t.muted)
+      .when(on, (el) => el.bg(t.selected).border_1().border_color(t.border).shadow_sm())
+      .when(!on, (el) => el.hover((st) => st.text_color(t.foreground).bg(t.hover))), s)
+      .child(this.glyphEl(ic, on ? 19 : GLYPH))
       .when(badge, (el) => el.child(div().absolute().top(-1).right(-2).p(1).rounded(4).bg(t.chrome)
         .child(this.statusDot(s.status, t, 5))));
 
