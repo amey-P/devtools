@@ -8,13 +8,14 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle } fr
 import { spaces, panes, focused, props, run, exec, readTextFile, watchFolder, theme, settings, nextCommand } from "herdr";
 import { layout, rowPaths, ROW, MID } from "./graph.js";
 import { discoverFirst } from "./discover.js";
-import { READ, LIMIT, parseNumstat, loadStatus, loadHead, loadTip, loadRefs, loadOperation, loadLog, loadInsight, classifyChange, dirtyCount } from "./load.js";
+import { READ, LIMIT, parseNumstat, parseLeftRight, isBaseBranch, loadStatus, loadHead, loadTip, loadRefs, loadOperation, loadLog, loadInsight, loadBase, loadOverview, classifyChange, dirtyCount } from "./load.js";
 import { norm, base, repoName, samePath } from "./paths.js";
 import { ICON, alpha, palette, hashOf, initials, ago } from "./ui.js";
 import { sidebar } from "./sidebar.js";
 import { snapshot, substantial } from "./pulse.js";
+import { overview, ordered, openWorktree } from "./overview.js";
 
-/** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult, Insight } from "./types" */
+/** @import { Commit, Detail, NumStat, Ref, Status, Theme, Repo, RefsState, Operation, ExecResult, Insight, WorktreeSummary, BaseDelta } from "./types" */
 /** @import { Snapshot, Pulse } from "./pulse.js" */
 /** @import { AsyncContext, Color, Context, Element } from "gpui-kit" */
 /** @import { Props } from "gpui-shell" */
@@ -25,12 +26,15 @@ const NO_REFS = { branches: [], worktrees: [], stashes: [], remotes: {}, tag: nu
 
 /**
  * Folders to look for a repo in, best first, and the machine to run git on.
- * The focused terminal wins; a terminal cd'd out of any repo falls back to
- * the tab's other terminals, then the space's folder.
+ * A worktree drilled into from the overview wins; then the focused terminal;
+ * a terminal cd'd out of any repo falls back to the tab's other terminals,
+ * then the space's folder.
+ * @param {{ path: string, on: string | null } | null} [target]
  * @returns {{ candidates: string[], on: string | null }}
  */
-function location() {
+function location(target = null) {
   const p = props() ?? {};
+  if (target) return { candidates: [target.path], on: target.on };
   if (p.folder) return { candidates: [p.folder], on: p.on ?? null };
   const all = panes(), f = focused(), tab = f?.tab;
   const space = spaces().find((s) => s.tabs.some((t) => t.id === tab)) ?? spaces().find((s) => s.active);
@@ -45,8 +49,6 @@ function location() {
 }
 /** This copy is the sidebar section. @returns {boolean} */
 const inSidebar = () => Boolean(props()?.sidebar);
-/** @type {() => string} */
-const key = () => JSON.stringify(location());
 
 /** @param {Operation} op @returns {string} */
 const opLabel = (op) => {
@@ -89,21 +91,116 @@ export default class Git extends View {
     if (inSidebar() && props()?.block) run("layout.resize", { id: props().block, weight: 1 });
     /** @type {"status" | "all" | null} */
     this.pending = null;
+    /** The window's page: every worktree, or one in full. Decided on the first load. @type {"overview" | "detail"} */
+    this.view = "detail";
+    this.viewChosen = inSidebar();
+    /** The worktree drilled into from the overview (else the focused terminal's is shown). @type {{ path: string, on: string | null } | null} */
+    this.target = null;
+    /** History shows only what HEAD has that the base branch doesn't. */
+    this.since = false;
+    /** @type {WorktreeSummary[]} */
+    this.overview = [];
+    this.overviewLoading = false;
+    /** @type {string | null} the overview card j/k is on */
+    this.overviewSel = null;
+    /** The branch worktrees are compared with. @type {string | null} */
+    this.base = null;
+    /** HEAD against it. @type {BaseDelta | null} */
+    this.baseDelta = null;
     this.reset();
     this.refresh(cx);
     // The watch covers local repos; this timer covers remote ones and anything it missed.
     cx.timer.every(10000, (cx) => this.refresh(cx, this.watched.length ? "status" : "all"));
     cx.timer.every(30000, (cx) => this.refresh(cx));
+    // File edits in the other worktrees aren't watched: poll them while the overview shows.
+    cx.timer.every(8000, (cx) => { if (this.view === "overview") this.reloadOverview(cx); });
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
         if (c === "focus") this.handle.focus();
         else if (c === "refresh") this.refresh(cx);
-        else if (c === "next") this.move(1, cx);
-        else if (c === "prev") this.move(-1, cx);
+        else if (c === "next") this.view === "overview" ? this.moveCard(1) : this.move(1, cx);
+        else if (c === "prev") this.view === "overview" ? this.moveCard(-1) : this.move(-1, cx);
         else if (c === "close") { this.sel = null; this.detail = null; }
+        else if (c === "overview" || c === "back") this.back(cx);
         else if (c === "toggle-all") { this.all = !this.all; this.refresh(cx); }
         cx.notify();
+      }
+    });
+  }
+
+  /** Where to look for the repo now. */
+  loc() { return location(this.target); }
+  /** What the view is showing, as a string to compare: it changes when the repo to show may have. */
+  key() { return JSON.stringify(this.loc()); }
+
+  /** There is more than one checkout to choose from. */
+  hasOverview() {
+    if (inSidebar() || !this.repo) return false;
+    return this.repo.kind === "bare" || this.refs.worktrees.filter((w) => !w.bare).length > 1;
+  }
+
+  /**
+   * Opens one worktree in full. History starts at what it has that the base lacks.
+   * @param {WorktreeSummary} w
+   * @param {Context} cx
+   */
+  drill(w, cx) {
+    if (w.prunable) return;
+    const isBase = isBaseBranch(w.branch, w.base?.ref ?? null);
+    this.target = { path: w.path, on: this.on };
+    this.view = "detail";
+    this.since = Boolean(this.base) && !isBase && Boolean(w.base?.ahead);
+    this.sel = null; this.detail = null;
+    this.handle.focus();
+    this.refresh(cx);
+  }
+
+  /**
+   * Back to the overview (Esc, the Back button, the "overview" command).
+   * @param {Context} cx
+   */
+  back(cx) {
+    if (inSidebar()) return;
+    const was = this.target;
+    this.target = null; this.since = false; this.sel = null; this.detail = null;
+    this.view = "overview";
+    if (was) this.overviewSel = was.path;
+    this.refresh(cx);
+    cx.notify();
+  }
+
+  /**
+   * Moves the overview's selection.
+   * @param {number} delta
+   */
+  moveCard(delta) {
+    const { list } = ordered(this);
+    if (!list.length) return;
+    const i = list.findIndex((w) => w.path === this.overviewSel);
+    this.overviewSel = list[Math.max(0, Math.min(list.length - 1, i < 0 ? 0 : i + delta))].path;
+  }
+
+  /**
+   * Rereads every worktree's summary for the overview (the window only).
+   * @param {Context} cx
+   */
+  reloadOverview(cx) {
+    if (inSidebar() || !this.repo) return;
+    if (this.overviewLoading) { this.overviewAgain = true; return; }
+    this.overviewLoading = true;
+    const repo = this.repo, on = this.on, baseRef = this.base, context = this.key();
+    const { git, gitAt, read } = this.runners(repo, on);
+    cx.spawn(async (cx) => {
+      try {
+        const list = await loadOverview(repo, baseRef, git, gitAt, read);
+        if (this.key() !== context) return;
+        this.overview = list;
+        if (!list.some((w) => w.path === this.overviewSel)) this.overviewSel = repo.root ?? list[0]?.path ?? null;
+      } catch { /* keep what's shown */ }
+      finally {
+        this.overviewLoading = false; cx.notify();
+        if (this.overviewAgain) { this.overviewAgain = false; this.reloadOverview(cx); }
       }
     });
   }
@@ -249,7 +346,7 @@ export default class Git extends View {
    */
   refresh(cx, level = "all") {
     if (this.loading) { this.again = this.again === "all" || level === "all" ? "all" : "status"; return; }
-    const { candidates, on } = location(), context = key();
+    const { candidates, on } = this.loc(), context = this.key();
     if (context !== this.context) {
       // Not on the first load: that's the view appearing, not the workspace changing.
       if (this.context !== undefined) this.switching = true;
@@ -266,17 +363,18 @@ export default class Git extends View {
           /** @type {(args: string[], cwd: string) => Promise<ExecResult>} */
           const probe = (args, cwd) => exec("git", args, { cwd, on });
           const found = await discoverFirst(candidates, probe, (p) => readTextFile(p, { on }));
-          if (key() !== context) return;
+          if (this.key() !== context) return;
           if (!found) { this.reset(); this.error = "Not a git repository"; this.cwd = candidates[0]; return; }
           repo = found.repo;
           // Another repo: start clean. The same one (focus moved within it): keep what's shown.
+          if (!this.repo || !samePath(this.repo.commonDir, repo.commonDir) || this.on !== on) this.overview = [];
           if (!this.repo || !samePath(this.repo.gitDir, repo.gitDir) || this.on !== on) this.reset();
         }
         const { git, gitAt, read } = this.runners(repo, on);
 
         if (level === "status") {
           const status = await loadStatus(repo, git);
-          if (key() !== context) return;
+          if (this.key() !== context) return;
           const wasDirty = this.commits[0]?.wip ?? false, dirty = dirtyCount(status) > 0;
           this.status = status;
           // HEAD moved or the WIP row appears/disappears: the history changes too.
@@ -284,19 +382,30 @@ export default class Git extends View {
           return;
         }
 
-        const [status, refs, op, head, tip] = await Promise.all([
+        const [status, refs, op, head, tip, baseRef] = await Promise.all([
           loadStatus(repo, git), loadRefs(repo, git, gitAt).catch(() => NO_REFS), loadOperation(repo, read), repo.root ? null : loadHead(git),
-          loadTip(git).catch(/** @returns {null} */ () => null),
+          loadTip(git).catch(/** @returns {null} */ () => null), loadBase(git).catch(/** @returns {null} */ () => null),
         ]);
         const oid = status ? status.oid : head?.oid ?? null;
         // The sidebar's extras; the window doesn't draw them.
-        const insight = inSidebar() && oid ? await loadInsight(git, status) : null;
-        const commits = this.awake ? await loadLog(repo, git, { all: this.all, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) }) : [];
-        if (key() !== context) return;
+        const insight = inSidebar() && oid ? await loadInsight(git, status, baseRef) : null;
+        /** @type {BaseDelta | null} */
+        let delta = insight?.base ?? null;
+        if (!inSidebar() && baseRef && oid) {
+          const lr = await git(["rev-list", "--left-right", "--count", `${baseRef}...HEAD`]).catch(/** @returns {null} */ () => null);
+          const counts = lr?.code === 0 ? parseLeftRight(lr.stdout) : null;
+          delta = counts ? { ref: baseRef, ...counts } : null;
+        }
+        const since = this.since && baseRef ? baseRef : null;
+        const commits = this.awake ? await loadLog(repo, git, { all: this.all, since, oid, dirty: dirtyCount(status), remotes: Object.keys(refs.remotes) }) : [];
+        if (this.key() !== context) return;
 
         const sameHistory = this.graph && this.commits.length === commits.length && this.commits.every((c, i) => c.hash === commits[i].hash && c.parents.join() === commits[i].parents.join());
         this.repo = repo; this.root = repo.root ?? repo.commonDir; this.on = on;
         this.status = status; this.refs = refs; this.op = op; this.tip = tip; this.insight = insight;
+        this.base = baseRef; this.baseDelta = delta;
+        // The window's first page: the overview when there's more than one checkout.
+        if (!this.viewChosen) { this.viewChosen = true; if (this.hasOverview()) this.view = "overview"; }
         this.head = status ? { branch: status.branch, oid: status.oid } : head;
         this.error = null; this.loaded = true;
         if (!sameHistory) {
@@ -308,11 +417,12 @@ export default class Git extends View {
         this.commits.forEach((c, i) => { c.row = this.graph.rows[i]; });
         if (this.sel && !commits.some((c) => c.hash === this.sel)) { this.sel = null; this.detail = null; }
         this.watch(repo, cx);
-      } catch (e) { if (key() === context) this.error = String(e.message ?? e); }
+        if (this.view === "overview") this.reloadOverview(cx);
+      } catch (e) { if (this.key() === context) this.error = String(e.message ?? e); }
       finally {
         this.loading = false; cx.notify();
         // Settled (no follow-up queued, still the same place): glow if it changed enough.
-        if (!this.again && key() === context) this.settle(cx);
+        if (!this.again && this.key() === context) this.settle(cx);
         if (this.again) { const l = this.again; this.again = null; this.refresh(cx, l); }
       }
     });
@@ -394,7 +504,12 @@ export default class Git extends View {
     const branch = repo ? (h.branch ?? (h.oid ? `detached @ ${h.oid.slice(0, 7)}` : "no commits yet")) : null;
     const kind = repo?.kind === "linked" ? "worktree" : repo?.kind === "main" ? null : repo?.kind;
     const stashes = this.refs.stashes.length;
+    const d = this.baseDelta, onBase = isBaseBranch(h.branch, d?.ref ?? null);
     return h_flex().h(52).flex_none().px(16).gap(10).items_center()
+      .when(this.hasOverview(), (e) => e.child(div().id("git-back").h(26).px(8).flex_none().rounded(7).flex().items_center().gap(4).cursor_pointer()
+        .text_size(11.5).text_color(t.muted).hover((st) => st.bg(t.hover).text_color(t.foreground)).tooltip("All worktrees (Esc)")
+        .on_click((_e, cx) => this.back(cx))
+        .child("‹ Worktrees")))
       .child(div().size(28).flex_none().rounded(8).flex().items_center().justify_center()
         .bg(alpha(t.accent, "22")).border_1().border_color(alpha(t.accent, "44"))
         .child(svg(ICON("branch")).size(15).text_color(t.accent)))
@@ -407,6 +522,11 @@ export default class Git extends View {
           .when(Boolean(s?.upstream), (e) => e.child(div().text_color(t.dim).truncate().child(`⟶ ${s.upstream}`)))
           .when(!s?.upstream && Boolean(this.refs.tag), (e) => e.child(div().text_color(t.dim).truncate().child(this.refs.tag))))))
       .child(div().flex_1())
+      .when(Boolean(d) && !onBase && (d.ahead > 0 || d.behind > 0), (e) => e.child(h_flex().flex_none().h(20).px(7).gap(5).items_center().rounded(10).bg(t.raised).text_size(11)
+        .tooltip(`Against ${d.ref}: ${d.ahead} ahead, ${d.behind} behind`)
+        .when(d.ahead > 0, (e) => e.child(div().text_color(t.ansi2).child(`↑${d.ahead}`)))
+        .when(d.behind > 0, (e) => e.child(div().text_color(t.blocked).child(`↓${d.behind}`)))
+        .child(div().text_color(t.dim).child(d.ref.replace(/^[^/]+\//, "")))))
       .when(Boolean(s?.ahead), (e) => e.child(this.chip("up", String(s.ahead), t.ansi2, t)))
       .when(Boolean(s?.behind), (e) => e.child(this.chip("down", String(s.behind), t.blocked, t)))
       .when(stashes > 0, (e) => e.child(this.chip("stash", String(stashes), t.ansi5, t)))
@@ -613,12 +733,22 @@ export default class Git extends View {
    */
   history(t) {
     const pal = palette(t), narrow = this.size.width < 440, mono = settings().font_family ?? "JetBrains Mono";
-    /** @param {string} id @param {string} label @param {boolean} on */
-    const seg = (id, label, on) => div().id(id).h(20).px(8).flex().items_center().rounded(5).text_size(11).cursor_pointer()
-      .when(on, (e) => e.bg(t.raised).text_color(t.foreground).shadow_sm())
-      .when(!on, (e) => e.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
-      .on_click((_e, cx) => { if (this.all !== (id === "seg-all")) { this.all = id === "seg-all"; this.refresh(cx); } })
-      .child(label);
+    const d = this.baseDelta, h = this.head;
+    const canSince = Boolean(d) && !isBaseBranch(h.branch, d.ref);
+    /** @param {"all" | "head" | "since"} mode @param {string} label */
+    const seg = (mode, label) => {
+      const on = mode === "since" ? this.since : !this.since && this.all === (mode === "all");
+      return div().id(`seg-${mode}`).h(20).px(8).flex().items_center().rounded(5).text_size(11).cursor_pointer()
+        .when(on, (e) => e.bg(t.raised).text_color(t.foreground).shadow_sm())
+        .when(!on, (e) => e.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
+        .on_click((_e, cx) => {
+          if (on) return;
+          this.since = mode === "since";
+          if (mode !== "since") this.all = mode === "all";
+          this.refresh(cx);
+        })
+        .child(label);
+    };
     const count = this.commits.filter((c) => !c.wip).length;
     return v_flex().flex_1().min_h(0)
       .child(h_flex().h(34).flex_none().px(16).gap(8).items_center().border_t(1).border_color(t.border)
@@ -626,7 +756,8 @@ export default class Git extends View {
         .child(div().text_size(11).text_color(t.dim).child(count >= LIMIT ? `latest ${LIMIT}` : String(count)))
         .child(div().flex_1())
         .child(h_flex().p(2).gap(2).rounded(7).bg(t.background).border_1().border_color(t.border)
-          .child(seg("seg-all", "All branches", this.all)).child(seg("seg-head", "Current", !this.all))))
+          .child(seg("all", "All branches")).child(seg("head", "Current"))
+          .when(canSince, (e) => e.child(seg("since", `Since ${d.ref.replace(/^[^/]+\//, "")}`)))))
       .child(div().flex_1().min_h(0).relative()
         .child(v_virtual_list("git-graph", this.commits.length, ROW, (i) => this.commits[i].hash,
           (range) => {
@@ -640,7 +771,9 @@ export default class Git extends View {
           .size_full().track_scroll(this.scroll)
           .on_item_click((hash, cx) => { this.handle.focus(); this.select(hash, cx); }))
         .child(Scrollbar.vertical("git-graph").absolute().inset_0())
-        .when(!this.commits.length && this.loaded, (e) => e.child(this.empty(t, "No commits yet", "Make the first commit and the graph starts here."))));
+        .when(!this.commits.length && this.loaded, (e) => e.child(this.since
+          ? this.empty(t, `Nothing since ${this.base}`, "This worktree has no commits of its own yet.")
+          : this.empty(t, "No commits yet", "Make the first commit and the graph starts here."))));
   }
 
   /**
@@ -749,13 +882,24 @@ export default class Git extends View {
    * @returns {Element}
    */
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    if (this.key() !== this.context) this.refresh(cx);
     const t = theme();
     const root = v_flex().id("git").size_full().min_h(0).relative().bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.handle)
       .on_size_change((size, cx) => { this.size = size; cx.notify(); })
       .on_key_down((e, cx) => {
         const k = e.key;
+        if (this.view === "overview" && !inSidebar()) {
+          const pick = () => ordered(this).list.find((w) => w.path === this.overviewSel);
+          if (k === "down" || k === "j") this.moveCard(1);
+          else if (k === "up" || k === "k") this.moveCard(-1);
+          else if (k === "enter") { const w = pick(); if (w) this.drill(w, cx); }
+          else if (k === "o") { const w = pick(); if (w) openWorktree(this.on, w); }
+          else if (k === "r") this.refresh(cx);
+          else return;
+          cx.notify(); cx.stop_propagation(); return;
+        }
+        if (k === "escape" && !this.detail && this.hasOverview()) { this.back(cx); cx.stop_propagation(); return; }
         if (k === "down" || k === "j") this.move(1, cx);
         else if (k === "up" || k === "k") this.move(-1, cx);
         else if (k === "escape" && this.detail) { this.sel = null; this.detail = null; cx.notify(); }
@@ -765,12 +909,14 @@ export default class Git extends View {
         cx.stop_propagation();
       });
     if (inSidebar()) return root.bg(t.chrome).child(sidebar(this, t));
+    if (this.view === "overview" && this.repo) return root.child(overview(this, t));
     if (!this.root) {
       return root.child(this.header(t)).child(div().flex_1().relative().child(
         this.loading || !this.error ? this.empty(t, "Reading repository…", "")
           : this.empty(t, this.error, this.error === "Not a git repository" ? `${this.cwd ?? "This folder"} isn't inside a git repo. cd into one in this tab's terminal.` : "")));
     }
-    const banner = this.opBanner(t), card = this.repo?.kind === "bare" ? this.worktreeCard(t) : this.statusCard(t), details = this.details(t);
+    // A bare repo has no tree of its own: its checkouts are the overview.
+    const banner = this.opBanner(t), card = this.repo?.kind === "bare" ? (this.hasOverview() ? null : this.worktreeCard(t)) : this.statusCard(t), details = this.details(t);
     return root.child(this.header(t)).when(Boolean(banner), (e) => e.child(banner)).when(Boolean(card), (e) => e.child(card))
       .child(this.history(t)).when(Boolean(details), (e) => e.child(details));
   }
