@@ -1,25 +1,21 @@
 // Git as a section of the sidebar (see herdr-minimal's layout: the `git` block
 // shares the sidebar's height with the space tree, so its top edge, where this
-// strip sits, is the sidebar's vertical middle). The strip is four short lines:
-// branch and cleanliness, an operation in progress and ahead/behind; the repo
-// and the last commit (or what's changed); the upstream, tag, stashes and commit
-// count; a bar of the changes by kind. A click grows the body below it in place
-// (a height transition, remembered across restarts): the working tree, two
-// weeks of activity, recent and incoming commits, branches, worktrees, stashes
-// and remotes. Colors mean the same thing everywhere, as soft tints and thin
-// left rails: accent is HEAD; green staged, ahead, unpushed, in sync; amber
-// modified, behind, incoming; red conflicts, gone, missing; blue untracked and
-// remotes; yellow tags; dim no upstream or stale. It describes the current
-// worktree only: what it has against the base branch, its commits and the agents
-// working in it; one row at the bottom sums up the other worktrees and opens the
-// overview (overview.js). The strip lights
-// up when the workspace changes or the repo changes in a way worth noticing
-// (pulse.js). Narrower than NARROW the section is a rail: the glyph over a column
-// of small marks (ahead/behind, the changes as an upright bar, lines changed, two
-// weeks of activity, against the base branch, tag, last commit's age) with the strip as a hover
-// card. The commit graph is too wide for the sidebar: the graph button (or
-// ctrl-shift-g) opens the full view as a window, on the worktree overview when
-// there is more than one.
+// strip sits, is the sidebar's vertical middle). It keeps to what's worth a
+// glance; the rest lives in the full view. The strip is two lines: branch and
+// cleanliness, an operation in progress, the change count and ahead/behind the
+// upstream; then the repo (and worktree), the last commit or what's changed, and
+// where HEAD stands against the base branch. A click grows the body below it in
+// place (a height transition, remembered across restarts): an operation banner,
+// the working tree's files, the agents working here, recent and incoming
+// commits, and one row summing up the other worktrees that opens the overview
+// (overview.js). Colors mean the same thing everywhere: accent is HEAD; green
+// staged, ahead, unpushed, clean; amber modified, behind, incoming; red
+// conflicts; blue untracked. The strip lights up when the workspace or the repo
+// changes in a way worth noticing (pulse.js). Narrower than NARROW the section
+// is a rail: the glyph over a column of small marks (operation, ahead/behind,
+// the changes as an upright bar, lines changed, against the base branch, last
+// commit's age) with the strip as a hover card. The graph button (or
+// ctrl-shift-g) opens the full view as a window.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, HoverCard } from "gpui-base";
 import { run } from "herdr";
@@ -35,9 +31,9 @@ import { totals } from "./worktrees.js";
 /** @import { Color, Element } from "gpui-kit" */
 /** @typedef {import("./main.js").default} Git */
 
-export const STRIP = 80;       // the strip's height, margins included
+export const STRIP = 58;       // the strip's height, margins included
 export const NARROW = 160;     // below this the sidebar is the icon rail
-const HEAD = 34, SEC_HEAD = 26, SEC_ROW = 24, BANNER = 38, ACTIVITY = 68, SUMMARY = 36;
+const HEAD = 34, SEC_HEAD = 26, SEC_ROW = 24, BANNER = 38, SUMMARY = 36;
 const DAY = 86400;
 const LIST_MAX = 8 * 24;       // the status card's file list, at most
 /** @typedef {import("gpui-shell").TransitionPolicy} Policy */
@@ -159,12 +155,25 @@ function lineBranch(g, t, open, chevron = true) {
 }
 
 /**
- * Line two: the repo, then the last commit, or what's changed while dirty.
+ * Line two: the repo, then the last commit, or what's changed while dirty, and
+ * at the end where HEAD stands against the base branch (unless it is the base).
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element}
  */
 function lineDetail(g, t) {
+  const d = delta(g);
+  const line = detailText(g, t);
+  return d ? line.child(baseMark(d, t)) : line;
+}
+
+/**
+ * The repo, then the last commit, or what's changed while dirty.
+ * @param {Git} g
+ * @param {Theme} t
+ * @returns {Element}
+ */
+function detailText(g, t) {
   const repo = g.repo, s = g.status, dirty = dirtyCount(s);
   const line = h_flex().h(15).pl(25).gap(5).items_center().text_size(11).min_w(0);
   if (!repo) return line.child(div().flex_1().min_w(0).truncate().text_color(t.dim)
@@ -185,39 +194,6 @@ function lineDetail(g, t) {
 }
 
 /**
- * A small tinted chip.
- * @param {string} text
- * @param {Color} color
- * @param {string | null} [icon]
- * @returns {Element}
- */
-function chip(text, color, icon = null) {
-  return h_flex().flex_none().px(4).h(14).gap(3).items_center().rounded(4).bg(alpha(color, "1f")).text_color(color).text_size(9.5).font_medium()
-    .when(Boolean(icon), (e) => e.child(svg(ICON(icon)).size(9)))
-    .child(text);
-}
-
-/**
- * Line three: where it syncs to, then where it stands against the base branch
- * (or, on the base branch itself, the latest tag and how far past it).
- * @param {Git} g
- * @param {Theme} t
- * @returns {Element}
- */
-function lineSync(g, t) {
-  const line = h_flex().h(15).pl(25).gap(5).items_center().text_size(10.5).min_w(0);
-  const s = g.status, refs = g.refs, d = delta(g);
-  if (!g.repo) return line;
-  const up = s?.upstream;
-  return line
-    .child(div().flex_1().min_w(0).truncate()
-      .when(Boolean(up), (e) => e.text_color(t.dim).child(`⟶ ${up}`))
-      .when(!up && g.repo.kind !== "bare", (e) => e.italic().text_color(alpha(t.dim, "bb")).child("local only")))
-    .when(Boolean(refs.tag) && !d, (e) => e.child(chip(refs.tagSince ? `${refs.tag} +${refs.tagSince}` : refs.tag, t.ansi3, "tag")))
-    .when(Boolean(d), (e) => e.child(baseMark(d, t)));
-}
-
-/**
  * "↑3 ↓12 main": commits the base lacks, and base commits this worktree lacks.
  * @param {BaseDelta} d
  * @param {Theme} t
@@ -232,37 +208,7 @@ function baseMark(d, t) {
 }
 
 /**
- * Line four: the changes by kind as one bar. Segments are pixel widths so they
- * slide when the counts change; clean, it is one quiet full-width segment.
- * @param {Git} g
- * @param {Theme} t
- * @returns {Element}
- */
-function lineBar(g, t) {
-  const s = g.status;
-  const groups = [
-    { id: "conflicts", color: t.ansi1, n: s?.conflicts.length ?? 0 },
-    { id: "staged", color: t.ansi2, n: s?.staged.length ?? 0 },
-    { id: "modified", color: t.blocked, n: s?.modified.length ?? 0 },
-    { id: "untracked", color: t.ansi4, n: s?.untracked.length ?? 0 },
-  ];
-  const total = groups.reduce((n, x) => n + x.n, 0);
-  const last = groups.map((x) => x.n > 0).lastIndexOf(true);
-  // Percent widths, not pixels: the measured size is in zoomed pixels and
-  // w() is not, so a pixel bar comes up short whenever the app is zoomed.
-  // Each segment's slot carries the gap after it, so the slots sum to 100%.
-  /** @param {string} id @param {Color} color @param {number} pct @param {boolean} gap */
-  const seg = (id, color, pct, gap) => div().id(`bar-${id}`).flex_none().h(3).w(`${pct}%`).pr(gap ? 2 : 0).transition("width", BAR)
-    .child(div().size_full().rounded(2).bg(color));
-  const segs = groups.map((x, i) => seg(x.id, x.color, total ? (x.n / total) * 100 : 0, x.n > 0 && i < last));
-  const quiet = !g.repo ? t.border : alpha(t.ansi2, "40");
-  return h_flex().h(3).ml(25).mt(2).items_center().overflow_hidden()
-    .children(segs)
-    .child(seg("clean", quiet, total ? 0 : 100, false));
-}
-
-/**
- * The strip: three lines on a card, a glow layer over it, and the content
+ * The strip: two lines on a card, a glow layer over it, and the content
  * dimmed and lowered while a workspace switch is loading.
  * @param {Git} g
  * @param {Theme} t
@@ -281,7 +227,7 @@ function strip(g, t, open) {
     .child(v_flex().id("git-lines").relative().px(8).pt(6).gap(2)
       .top(leaving ? 4 : 0).opacity(leaving ? 0.3 : 1)
       .transition("top", leaving ? LEAVE : ENTER).transition("opacity", leaving ? LEAVE : ENTER)
-      .child(lineBranch(g, t, open)).child(lineDetail(g, t)).child(lineSync(g, t)).child(lineBar(g, t)));
+      .child(lineBranch(g, t, open)).child(lineDetail(g, t)));
 }
 
 /**
@@ -293,8 +239,7 @@ function strip(g, t, open) {
 function railCard(g, t) {
   return v_flex().w(250).px(10).py(8).gap(2).rounded(9).bg(t.popover).border_1().border_color(t.border)
     .text_size(13).text_color(t.foreground)
-    .child(lineBranch(g, t, false, false)).child(lineDetail(g, t)).child(lineSync(g, t))
-    .when(Boolean(g.status), (e) => e.child(lineBar(g, t)));
+    .child(lineBranch(g, t, false, false)).child(lineDetail(g, t));
 }
 
 /**
@@ -329,8 +274,9 @@ function railSync(g, t) {
 }
 
 /**
- * The changes by kind as an upright bar (lineBar turned on its side), the count
- * under it; clean, a short quiet stub. Percent heights, for the reason lineBar gives.
+ * The changes by kind as an upright bar, the count under it; clean, a short
+ * quiet stub. Percent heights: the measured size is in zoomed pixels and h() is
+ * not, so a pixel bar comes up short whenever the app is zoomed.
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element | null}
@@ -370,27 +316,6 @@ function railDelta(g, t) {
 }
 
 /**
- * Two weeks of commits as an upright sparkline: a row per day, oldest at the
- * top, today at the bottom in full accent; quiet days are faint dots.
- * @param {Git} g
- * @param {Theme} t
- * @returns {Element | null}
- */
-function railActivity(g, t) {
-  const days = g.insight?.activity;
-  if (!days?.length) return null;
-  const max = Math.max(1, ...days), W = 22;
-  return v_flex().flex_none().w(W).gap(1)
-    .children(days.map((n, i) => {
-      const today = i === days.length - 1;
-      const a = n ? Math.round(0x44 + (n / max) * 0x88).toString(16) : "";
-      const color = !n ? t.border : today ? t.accent : alpha(t.accent, a);
-      return div().id(`rail-act-${i}`).h(2).rounded(1).bg(color)
-        .w(n ? Math.max(4, Math.round((n / max) * W)) : 2).transition("width", BAR);
-    }));
-}
-
-/**
  * Against the base branch: its name, ahead over behind, dimmer than the upstream's.
  * @param {Git} g
  * @param {Theme} t
@@ -403,20 +328,6 @@ function railBase(g, t) {
     .child(div().text_color(t.dim).child(shortBase(d.ref).slice(0, 4)))
     .when(d.ahead > 0, (e) => e.child(div().text_color(alpha(t.ansi2, "cc")).child(`↑${compact(d.ahead)}`)))
     .when(d.behind > 0, (e) => e.child(div().text_color(alpha(t.blocked, "cc")).child(`↓${compact(d.behind)}`)));
-}
-
-/**
- * The latest tag: its icon, and how far past it HEAD is.
- * @param {Git} g
- * @param {Theme} t
- * @returns {Element | null}
- */
-function railTag(g, t) {
-  if (!g.refs.tag) return null;
-  const since = g.refs.tagSince;
-  return v_flex().flex_none().items_center().text_color(since ? alpha(t.ansi3, "bb") : t.ansi3)
-    .child(svg(ICON("tag")).size(10))
-    .when(since > 0, (e) => e.child(div().text_size(8.5).child(`+${compact(since)}`)));
 }
 
 /**
@@ -435,8 +346,8 @@ function railAge(g, t) {
 /**
  * The rail (narrow sidebar): the glyph, ringed while it glows, and under it a
  * column of small marks: an operation in progress, ahead/behind, the changes as
- * an upright bar with their count, lines added/removed, two weeks of activity,
- * ahead/behind the base branch, the tag and the last commit's age. Marks with nothing to say are
+ * an upright bar with their count, lines added/removed, ahead/behind the base
+ * branch and the last commit's age. Marks with nothing to say are
  * left out. Hovering shows the strip's lines as a card; a click opens the full view.
  * @param {Git} g
  * @param {Theme} t
@@ -449,7 +360,7 @@ function rail(g, t) {
       .opacity(on ? 1 : 0).transition("opacity", on ? GLOW_IN : GLOW_OUT))
     .child(glyph(g, t));
   const marks = g.repo
-    ? [railOp(g, t), railSync(g, t), railChanges(g, t), railDelta(g, t), railActivity(g, t), railBase(g, t), railTag(g, t), railAge(g, t)]
+    ? [railOp(g, t), railSync(g, t), railChanges(g, t), railDelta(g, t), railBase(g, t), railAge(g, t)]
     : [];
   const leaving = g.switching;
   const column = v_flex().id("git-rail").w(36).flex_none().items_center().gap(8).py(8).rounded(9).cursor_pointer()
@@ -484,19 +395,17 @@ function button(id, icon, tip, act, t) {
 }
 
 /**
- * Repo name, the worktree's folder, upstream or tag, and the graph and refresh buttons.
+ * Repo name, the worktree's folder, and the graph and refresh buttons.
  * @param {Git} g
  * @param {Theme} t
  * @returns {Element}
  */
 function head(g, t) {
-  const s = g.status;
   const { name, sub } = where(g);
-  const to = s?.upstream ? `⟶ ${s.upstream}` : g.refs.tag ?? "";
   return h_flex().h(HEAD).flex_none().px(12).gap(6).items_center().text_size(11.5)
     .child(div().flex_none().max_w(110).truncate().font_semibold().text_color(t.muted).child(name))
     .when(Boolean(sub), (e) => e.child(div().flex_none().max_w(90).truncate().px(4).h(14).flex().items_center().rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child(sub)))
-    .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(to))
+    .child(div().flex_1())
     .child(button("git-graph", svg(ICON("branch")).size(12), "Commit graph (ctrl-shift-g)", openFull, t))
     .child(button("git-refresh", g.loading ? svg(ICON("spinner")).size(12).spin(900) : svg(ICON("refresh")).size(12), "Refresh", (cx) => g.refresh(cx), t));
 }
@@ -570,35 +479,6 @@ function commitRow(c, kind, t) {
     .when(Boolean(mark), (e) => e.child(div().flex_none().text_size(10.5).text_color(mark).child(incoming ? "↓" : "↑")))
     .child(div().w(24).flex_none().text_right().text_size(10.5).text_color(t.dim).child(c.at ? ago(c.at) : ""));
   return mark ? railed(row, mark) : row;
-}
-
-/**
- * Two weeks of commits as a row of bars, today's in full accent, quiet days faint.
- * @param {Git} g
- * @param {Theme} t
- * @returns {Element | null}
- */
-function activity(g, t) {
-  const days = g.insight?.activity;
-  if (!days?.length) return null;
-  const max = Math.max(1, ...days), sum = days.reduce((n, x) => n + x, 0);
-  const H = 22;
-  const bars = days.map((n, i) => {
-    const today = i === days.length - 1;
-    const h = n ? Math.max(3, Math.round((n / max) * H)) : 2;
-    const a = n ? Math.round(0x44 + (n / max) * 0x88).toString(16) : "";
-    const color = !n ? t.border : today ? t.accent : alpha(t.accent, a);
-    return div().flex_1().h(H).flex().flex_col().justify_end().tooltip(`${plural(n, "commit")} ${today ? "today" : `${days.length - 1 - i}d ago`}`)
-      .child(div().id(`act-${i}`).w_full().h(h).rounded(2).bg(color).transition("height", BAR));
-  });
-  const tip = g.tip;
-  return v_flex().mx(12).mb(10).px(10).pt(8).pb(6).gap(5).flex_none().rounded(10).bg(t.surface).border_1().border_color(t.border)
-    .child(h_flex().h(H).gap(2).items_end().children(bars))
-    .child(h_flex().h(14).gap(5).items_center().text_size(10.5)
-      .child(div().text_color(sum ? t.muted : t.dim).child(sum ? plural(sum, "commit") : "No commits"))
-      .child(div().text_color(t.dim).child("· 14 days"))
-      .child(div().flex_1())
-      .when(Boolean(tip?.at), (e) => e.child(div().text_color(t.dim).child(`last ${ago(tip.at)} ago`))));
 }
 
 /**
@@ -681,8 +561,6 @@ function body(g, t) {
   if (banner) { parts.push(banner); height += BANNER; }
   const card = g.repo.kind === "bare" ? g.worktreeCard(t) : g.statusCard(t, { maxList: LIST_MAX });
   if (card) { parts.push(card); height += g.repo.kind === "bare" ? 34 + 10 : g.statusCardHeight(); }
-  const act = activity(g, t);
-  if (act) { parts.push(act); height += ACTIVITY; }
   const { here, all } = agentsHere(g);
   const sec = sections(g, here, t);
   if (sec.rows.length) { parts.push(v_flex().px(6).pb(6).children(sec.rows)); height += sec.height + 6; }
