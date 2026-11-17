@@ -80,3 +80,13 @@ Baseline shots (rail strip, 52 px wide): `docs/baseline/rail-3spaces.png` (the u
 1. **Override key collisions follow JS property order.** After trim+lowercase, the oracle keeps the last entry in `Object.entries` order: integer-like keys first (ascending), then source order (cases "collision: …"). A Gleam `Dict` from `gleam_json` loses that order. Exact parity needs the decoder to see the entries in order. Options: an FFI `entries` (needs approval), or a documented divergence for files that spell the same name twice.
 2. **Log text contains the engine's error message** (`SyntaxError: Unexpected end of JSON input` is V8's; QuickJS words it differently). Log parity is therefore the prefix `space-icons: overrides.json: ` plus "exactly one Log" (I5), not the full text.
 3. A root that is a string/number/array decodes the way `Object.entries` does (array → index keys; string → per-char keys with string values, which have no effect). Root `null` → TypeError → Log.
+
+## Phase 3: numeric core and FFI (2026-11-17)
+
+- **FFI in use (10 of the 12 allowed):** `utf16_units imul to_u32 to_i32 js_num n2 cos sin pi to_base36`, all in `src/space_icons/ffi/js.mjs` and bound once in `space_icons/js.gleam`. `round` and `to_hex` are **not added**: only `alpha()` needed them, and it is not ported (D2). Each function has a test in `test/ffi_test.gleam`.
+- **`>>>` without FFI:** Gleam's `int.bitwise_shift_right` is the signed `>>`. `x >>> n` = `to_u32(x) / 2^n` (Gleam int division truncates; the operand is non-negative and below 2^53, so it is exact). `^`, `|` and `+` already have JS semantics on the JS target.
+- **RNG as state passing:** `rng.next/int/pick/chance` return `#(value, Rng)`. Each call is exactly one `rnd()` in geo.js, so the draw order can be checked against the source line by line.
+- `gleam_stdlib` 1.x has no `list.range`, so geo.gleam has a private `upto(n)`.
+- **Parity (fast-check, `parity/numeric.test.js`):** fnv1a on 5,000 arbitrary UTF-16 strings (lone surrogates included) + 5,000 full-Unicode strings. The first 64 mulberry32 draws for 2,000 u32 seeds. 5,000 random int/pick/chance sequences. `String(n2(v))` on 5,000 doubles. `poly` on 5,000 random inputs. The oracle's private helpers come from `parity/oracle-private.js`, which imports the frozen geo.js text plus one export line, so the file itself is unchanged.
+- **The tests can fail:** a wrong FNV prime and a signed shift in mulberry32 each turned 4 properties red. Both were reverted.
+- Gleam string literals cannot spell lone surrogates, so `utf16_units` on lone surrogates is tested from Vitest (UTF-16 property) and not in gleeunit.
