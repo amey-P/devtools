@@ -1,0 +1,115 @@
+// A rail of spaces, one icon each. The icon comes from a hash of the space's
+// name (glyphs.js), so the same repo or folder always looks the same. Click to
+// switch, right-click for the space menu, hover for the name.
+
+import { View, div, svg } from "gpui-kit";
+import { v_flex, h_flex } from "gpui-base";
+import { spaces, run, openOverlay, theme, window, appHome, readTextFile } from "herdr";
+import { iconFor } from "./glyphs.js";
+import { GeoCache } from "./geocache.js";
+
+/** @import { Theme } from "./types" */
+/** @import { SpaceInfo } from "herdr" */
+
+const CELL = 34;
+const LOUD = new Set(["blocked", "done", "working"]);
+
+export default class SpaceIcons extends View {
+  /**
+   * @param {import("gpui-shell").Props | undefined} _props
+   * @param {import("gpui-kit").AsyncContext} cx
+   */
+  init(_props, cx) {
+    this.overrides = {};
+    this.geo = new GeoCache("space-icons");
+    this.geo.start(cx);
+    cx.spawn(async (cx) => {
+      try {
+        const text = await readTextFile(`${appHome()}/mods/space-icons/overrides.json`);
+        if (text) {
+          const raw = JSON.parse(text);
+          this.overrides = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k.trim().toLowerCase(), v]));
+        }
+      } catch (e) {
+        console.log(`space-icons: overrides.json: ${e}`);
+      }
+      await this.geo.load();
+      cx.notify();
+    });
+  }
+
+  /**
+   * @param {SpaceInfo} s
+   * @param {Theme} t
+   * @returns {import("gpui-kit").Element}
+   */
+  cell(s, t) {
+    const ic = iconFor(s.name, this.overrides);
+    // A pinned Lucide icon, else the geometric one once it's on disk (empty box until then).
+    const path = ic.glyph ? `mods/space-icons/icons/${ic.glyph}.svg` : this.geo.path(ic.seed, ic.family);
+    const loud = LOUD.has(s.status);
+    return h_flex()
+      .id(`space-${s.id}`)
+      .relative()
+      .w_full()
+      .h(CELL + 6)
+      .flex_none()
+      .justify_center()
+      .items_center()
+      .cursor_pointer()
+      .tooltip(s.machine ? `${s.name} · ${s.machine}` : s.name)
+      .on_click(() => run("space.select", { id: s.id }))
+      .on_mouse_down("right", () =>
+        openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: s.id } } }))
+      // Active: a thin bar on the rail's edge.
+      .when(s.active, (el) => el.child(div().absolute().left(0).top(11).bottom(11).w(2).rounded(1).bg(t.accent)))
+      .child(
+        h_flex()
+          .relative()
+          .size(CELL)
+          .rounded(10)
+          .justify_center()
+          .items_center()
+          .text_color(s.active ? t.foreground : t.muted)
+          .border_1()
+          .when(s.active, (el) => el.bg(t.selected).border_color(t.border))
+          .when(!s.active, (el) => el.bg(t.surface).border_color(t.surface).hover((st) => st.bg(t.hover).text_color(t.foreground)))
+          .child(path ? svg(path).size(17) : div().size(17))
+          .when(loud, (el) => el.child(
+            div().absolute().top(-3).right(-3).size(9).rounded(5).border_2().border_color(t.chrome).bg(t[s.status] ?? t.unknown)
+              .when(s.status === "working", (d) => d.loop("opacity", { from: 0.35, to: 1, period: 1200 }))))
+          .when(Boolean(s.machine), (el) => el.child(
+            h_flex().absolute().bottom(-3).right(-3).size(13).rounded(4).bg(t.chrome).justify_center().items_center().text_color(t.muted)
+              .child(svg("mods/workspace-chrome/server.svg").size(9)))),
+      );
+  }
+
+  render() {
+    const t = theme();
+    const w = window();
+    const lights = w?.platform === "macos" && !w?.fullscreen;
+    return v_flex()
+      .size_full()
+      .min_h(0)
+      .bg(t.chrome)
+      .pt(lights ? 40 : 10)
+      .pb(8)
+      .child(
+        v_flex().flex_1().min_h(0).gap(2).overflow_y_scrollbar()
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .children(spaces().map((s) => this.cell(s, t))),
+      )
+      .child(
+        h_flex().flex_none().w_full().justify_center().pt(6)
+          .child(
+            h_flex().id("space-new").size(CELL).rounded(10).justify_center().items_center()
+              .border_1().border_color(t.border).text_color(t.dim)
+              .hover((s) => s.bg(t.hover).text_color(t.foreground))
+              .tooltip("New space")
+              .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+              .on_click(() => run("space.new"))
+              .child(svg("mods/workspace-chrome/plus.svg").size(14)),
+          ),
+      );
+  }
+}

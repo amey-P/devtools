@@ -63,3 +63,20 @@ Baseline shots (rail strip, 52 px wide): `docs/baseline/rail-3spaces.png` (the u
 - `herdr-app check mods/space-icons-spike` → passed. `mod.open` showed `Hello from Gleam · busy/2=2.5 · 12.0=12` (`docs/baseline/spike-overlay.png`). **QuickJS runs Gleam's JS output unchanged; no workaround needed.**
 - `js_num(12.0)` → `12` confirms parity trap 5.3: Gleam floats must cross the FFI to get JS number formatting.
 - `typescript_declarations = true` in gleam.toml gives the shell `.d.mts` types for the core.
+
+## Phase 2: parity oracle (2026-11-17)
+
+- **Oracle:** `parity/oracle/{glyphs,geo,geocache,main}.js` are copied from `herdr-minimal/space-icons` at 434a9e9. `SHA256SUMS` + a test keep them frozen. `geocache.js` is included because `main.js` imports it.
+- **Fakes via Vitest aliases** (`vitest.config.js`): `herdr`, `gpui-kit`, `gpui-base` and `fs/promises` resolve to `parity/fakes/`. The oracle runs unmodified. **Rejected:** a Node loader hook (more moving parts) and copying main.js's override-decoding expression (it would test a copy, not the code). The oracle's own `init` decodes overrides through the fake `readTextFile`.
+- **Tree format** `{kind, args, attrs[{m,a}], children}`. `.when` is control flow and is not recorded. `children(xs)` is recorded the same as `child`. `hover(f)` records its style calls. `undefined` → `"$undefined"`. The recorder **throws if an attr follows a child**. The oracle never does this, which justifies the core's `El(kind, attrs, children)`.
+- **Handler labels = behaviour:** each callback runs once at record time with a fake event/cx, and the label is the list of herdr/cx calls it made (e.g. `[["run","space.select",{"id":"s1"}]]`, `[["cx.stop_propagation"]]`). View parity therefore also checks I7's exact arguments.
+- **Corpus (a):** 10,000 names (`parity/corpus.js`, fixed-seed PRNG): ASCII, Unicode whitespace (and look-alikes that are not whitespace: U+180E, U+200B, U+0085), emoji/ZWJ, CJK, combining marks, case-mapping specials (İ, ß, Σ, ǅ, K), lone surrogates and prototype keys. iconFor is run plain and with a 1,170-hit overrides text, plus 46 targeted override cases.
+- **Corpus (b) storage:** 10,000 names × 7 requests (auto + 6 families) = 70,000 rows `[i, req, family, file, sha256/16]` in `geo.jsonl.gz` (1.1 MB). The full SVG text is kept for the first 200 names (`geo-full.json`) for readable diffs. **Rejected:** full SVGs for all rows (~40 MB). The 64-bit SHA prefix plus the oracle's own 32-bit file name makes a silent byte difference astronomically unlikely.
+- **View set (c):** 30 cases = every window × theme with 0 spaces (8), plus 22 greedy all-pairs cases over count{1,7} × status{idle,working,blocked,done,weird} × active × machine{none,vps} × icon{geo ready, geo missing, pinned} × window{macos, macos-fullscreen, linux, null} × theme{full, no status colors → `unknown` fallback}. A 7-space case puts the subject among 6 fixed others covering every status/machine/icon.
+- **Regeneration:** `npm run golden` writes the files. A plain `vitest run` rebuilds them in memory and fails on any difference.
+
+### Findings that need a decision later (raised at the phase 4 gate)
+
+1. **Override key collisions follow JS property order.** After trim+lowercase, the oracle keeps the last entry in `Object.entries` order: integer-like keys first (ascending), then source order (cases "collision: …"). A Gleam `Dict` from `gleam_json` loses that order. Exact parity needs the decoder to see the entries in order. Options: an FFI `entries` (needs approval), or a documented divergence for files that spell the same name twice.
+2. **Log text contains the engine's error message** (`SyntaxError: Unexpected end of JSON input` is V8's; QuickJS words it differently). Log parity is therefore the prefix `space-icons: overrides.json: ` plus "exactly one Log" (I5), not the full text.
+3. A root that is a string/number/array decodes the way `Object.entries` does (array → index keys; string → per-char keys with string values, which have no effect). Root `null` → TypeError → Log.

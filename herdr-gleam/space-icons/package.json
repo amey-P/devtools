@@ -6,7 +6,8 @@
   "scripts": {
     "build": "scripts/build.sh",
     "test": "gleam test && vitest run",
-    "typecheck": "tsc -p shell --noEmit"
+    "typecheck": "tsc -p shell --noEmit",
+    "golden": "GOLDEN=write vitest run parity/golden.test.js"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

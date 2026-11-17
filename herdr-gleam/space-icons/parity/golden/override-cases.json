@@ -1,0 +1,515 @@
+[
+ {
+  "note": "no file",
+  "name": "repo",
+  "text": null,
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "read fails",
+  "name": "repo",
+  "text": null,
+  "fail": true,
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": [
+   "space-icons: overrides.json: Error: EACCES: /HOME/mods/space-icons/overrides.json"
+  ]
+ },
+ {
+  "note": "glyph index",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":3}}",
+  "icon": [
+   "fish",
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph index 0",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":0}}",
+  "icon": [
+   "rocket",
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph index last",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":63}}",
+  "icon": [
+   "tent",
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph index out of range",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":64}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph index negative",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":-1}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph 1.0 is an integer",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":1.0}}",
+  "icon": [
+   "cat",
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph 1.5 ignored",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":1.5}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph name",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":\"rocket\"}}",
+  "icon": [
+   "rocket",
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph name wrong case",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":\"Rocket\"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph name invalid",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":\"nope\"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "glyph bool ignored",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":true}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":\"other\"}}",
+  "icon": [
+   null,
+   "other",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed kept untrimmed",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":\"  Other Seed \"}}",
+  "icon": [
+   null,
+   "  Other Seed ",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed blank",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":\"   \"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed empty",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":\"\"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed unicode blank",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":\"\\u3000\\u00a0\"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "seed number ignored",
+  "name": "repo",
+  "text": "{\"repo\":{\"seed\":42}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "family",
+  "name": "repo",
+  "text": "{\"repo\":{\"family\":\"orbit\"}}",
+  "icon": [
+   null,
+   "repo",
+   "orbit"
+  ],
+  "logs": []
+ },
+ {
+  "note": "family unknown kept",
+  "name": "repo",
+  "text": "{\"repo\":{\"family\":\"nope\"}}",
+  "icon": [
+   null,
+   "repo",
+   "nope"
+  ],
+  "logs": []
+ },
+ {
+  "note": "family empty ignored",
+  "name": "repo",
+  "text": "{\"repo\":{\"family\":\"\"}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "color ignored at HEAD",
+  "name": "repo",
+  "text": "{\"repo\":{\"color\":4}}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "all three",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":\"cat\",\"seed\":\"s\",\"family\":\"tiles\"}}",
+  "icon": [
+   "cat",
+   "s",
+   "tiles"
+  ],
+  "logs": []
+ },
+ {
+  "note": "key trimmed and lowercased",
+  "name": "my repo",
+  "text": "{\"  My Repo\\t\":{\"glyph\":\"cat\"}}",
+  "icon": [
+   "cat",
+   "my repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "name trimmed and lowercased",
+  "name": "  MY REPO ",
+  "text": "{\"my repo\":{\"glyph\":\"cat\"}}",
+  "icon": [
+   "cat",
+   "my repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "value null",
+  "name": "repo",
+  "text": "{\"repo\":null}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "value string",
+  "name": "repo",
+  "text": "{\"repo\":\"rocket\"}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "value number",
+  "name": "repo",
+  "text": "{\"repo\":7}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "value array",
+  "name": "repo",
+  "text": "{\"repo\":[{\"glyph\":1}]}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "root array, index key",
+  "name": "0",
+  "text": "[{\"glyph\":\"cat\"}]",
+  "icon": [
+   "cat",
+   "0",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "root null",
+  "name": "repo",
+  "text": "null",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": [
+   "space-icons: overrides.json: TypeError: Cannot convert undefined or null to object"
+  ]
+ },
+ {
+  "note": "root string",
+  "name": "repo",
+  "text": "\"repo\"",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "root number",
+  "name": "repo",
+  "text": "12",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "root true",
+  "name": "repo",
+  "text": "true",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "invalid json",
+  "name": "repo",
+  "text": "{\"repo\":",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": [
+   "space-icons: overrides.json: SyntaxError: Unexpected end of JSON input"
+  ]
+ },
+ {
+  "note": "empty text",
+  "name": "repo",
+  "text": "",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "empty object",
+  "name": "repo",
+  "text": "{}",
+  "icon": [
+   null,
+   "repo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "__proto__ override",
+  "name": "__proto__",
+  "text": "{\"__proto__\":{\"glyph\":\"ghost\"}}",
+  "icon": [
+   "ghost",
+   "__proto__",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "constructor, no override",
+  "name": "constructor",
+  "text": "{\"repo\":{\"glyph\":1}}",
+  "icon": [
+   null,
+   "constructor",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "constructor override",
+  "name": "constructor",
+  "text": "{\"constructor\":{\"glyph\":\"ghost\"}}",
+  "icon": [
+   "ghost",
+   "constructor",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "toString, no override",
+  "name": "toString",
+  "text": "{}",
+  "icon": [
+   null,
+   "tostring",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "collision: last written wins",
+  "name": "foo",
+  "text": "{\"Foo\":{\"glyph\":\"cat\"},\"foo\":{\"glyph\":\"dog\"}}",
+  "icon": [
+   "dog",
+   "foo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "collision: reversed",
+  "name": "foo",
+  "text": "{\"foo\":{\"glyph\":\"dog\"},\"Foo\":{\"glyph\":\"cat\"}}",
+  "icon": [
+   "cat",
+   "foo",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "collision: index key sorts first",
+  "name": "1",
+  "text": "{\"1 \":{\"glyph\":\"cat\"},\"1\":{\"glyph\":\"dog\"}}",
+  "icon": [
+   "cat",
+   "1",
+   null
+  ],
+  "logs": []
+ },
+ {
+  "note": "duplicate raw key",
+  "name": "repo",
+  "text": "{\"repo\":{\"glyph\":\"cat\"},\"repo\":{\"glyph\":\"dog\"}}",
+  "icon": [
+   "dog",
+   "repo",
+   null
+  ],
+  "logs": []
+ }
+]
