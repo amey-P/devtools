@@ -1,0 +1,13 @@
+name = "space_icons"
+version = "0.1.0"
+target = "javascript"
+
+[javascript]
+typescript_declarations = true
+runtime = "node"
+
+[dependencies]
+gleam_stdlib = ">= 1.1.0 and < 2.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.11.0 and < 2.0.0"

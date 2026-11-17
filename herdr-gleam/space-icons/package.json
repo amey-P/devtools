@@ -1,0 +1,17 @@
+{
+  "name": "space-icons-g",
+  "private": true,
+  "type": "module",
+  "description": "Gleam core + thin TS shell for the Herdr space-icons mod. See README.md.",
+  "scripts": {
+    "build": "scripts/build.sh",
+    "test": "gleam test && vitest run",
+    "typecheck": "tsc -p shell --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "fast-check": "4.10.2",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}

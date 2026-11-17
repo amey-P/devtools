@@ -54,3 +54,12 @@ Baseline shots (rail strip, 52 px wide): `docs/baseline/rail-3spaces.png` (the u
 - Duplicate keys after trim+lowercase: the last wins.
 - `overrides["constructor"]` is a truthy function in JS, with no `glyph/seed/family` fields → no effect.
 - `glyph: 1.0` → index 1 (a JS integer). `1.5`, `-1` and out-of-range values → ignored.
+
+## Phase 1: toolchain spike (2026-11-17)
+
+- Pinned: esbuild 0.28.2, typescript 5.9.3 (the repo's own version; 7.x skipped as too new for the `.d.ts` files), vitest 5.1.0, fast-check 4.10.2. Gleam deps: gleam_stdlib 1.1.0, gleeunit 1.11.0 (dev).
+- esbuild's `postinstall` was **not** approved (`npm install-scripts`). The platform binary comes from its optional dependency, and `npx esbuild --version` works without the postinstall.
+- The spike module used a custom type, a `List`, a `Dict`, a `case` and the FFI `js_num`. It was bundled with `esbuild --bundle --format=esm --external:herdr --external:gpui-kit --external:gpui-base --external:fs/promises` (24 KB, stdlib included).
+- `herdr-app check mods/space-icons-spike` → passed. `mod.open` showed `Hello from Gleam · busy/2=2.5 · 12.0=12` (`docs/baseline/spike-overlay.png`). **QuickJS runs Gleam's JS output unchanged; no workaround needed.**
+- `js_num(12.0)` → `12` confirms parity trap 5.3: Gleam floats must cross the FFI to get JS number formatting.
+- `typescript_declarations = true` in gleam.toml gives the shell `.d.mts` types for the core.
