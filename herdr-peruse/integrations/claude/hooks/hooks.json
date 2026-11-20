@@ -1,17 +1,7 @@
 {
-  "description": "Herdr peruse: plans on ExitPlanMode's permission request, questions on AskUserQuestion's, and the last reply on Stop (inside herdr-app terminals only).",
+  "description": "Herdr peruse: questions on AskUserQuestion's permission request, and the last reply on Stop (inside herdr-app terminals only).",
   "hooks": {
     "PermissionRequest": [
-      {
-        "matcher": "ExitPlanMode",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/claude-hook.mjs\"",
-            "timeout": 345600
-          }
-        ]
-      },
       {
         "matcher": "AskUserQuestion",
         "hooks": [

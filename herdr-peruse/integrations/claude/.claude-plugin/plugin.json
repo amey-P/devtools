@@ -1,7 +1,7 @@
 {
   "name": "herdr-peruse",
   "version": "0.5.1",
-  "description": "Read and annotate any markdown in the Herdr app: documents and long answers agents hand you, plans to approve, and quick decisions to click. Inside Herdr, Claude can show a long answer as a document, plans open beside it on ExitPlanMode, and AskUserQuestion opens as options. Outside Herdr, Claude's normal prompts show.",
+  "description": "Read and annotate any markdown in the Herdr app: documents and long answers agents hand you, and quick decisions to click. Inside Herdr, Claude can show a long answer as a document, and AskUserQuestion opens as options. Outside Herdr, Claude's normal prompts show.",
   "author": {
     "name": "Amey Patil"
   }

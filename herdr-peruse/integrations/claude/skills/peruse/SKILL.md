@@ -1,6 +1,6 @@
 ---
 name: peruse
-description: Show the user a document to read and annotate in the Herdr app instead of a wall of text in the terminal. Use it on your own whenever an answer would run past ~40 lines or needs several sections, tables or long code (an explanation, a comparison, a design note, a review, a report), whenever you have 3 or more open questions that need context to answer (put them in the doc as ```choice blocks), and when the user asks to read, review or annotate something ("let me read it", "send it for review"). Their notes and picks come back as their next message. Only inside a Herdr app terminal (HC_TERMINAL_ID is set). Not for plans in plan mode (ExitPlanMode already opens them) or for 1-4 quick questions (use AskUserQuestion).
+description: Show the user a document to read and annotate in the Herdr app instead of a wall of text in the terminal. Use it on your own whenever an answer would run past ~40 lines or needs several sections, tables or long code (an explanation, a comparison, a design note, a review, a report), whenever you have 3 or more open questions that need context to answer (put them in the doc as ```choice blocks), and when the user asks to read, review or annotate something ("let me read it", "send it for review"). Their notes and picks come back as their next message. Only inside a Herdr app terminal (HC_TERMINAL_ID is set). Not for 1-4 quick questions (use AskUserQuestion).
 ---
 
 # Peruse: hand the user a document
