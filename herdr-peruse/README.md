@@ -9,7 +9,7 @@ comment on, delete or replace any block, click the options in its `choice` block
 - **Plans** open the same way when an agent leaves plan mode: approve them or send them back.
 - **Quick decisions** are options to click, answered in seconds.
 
-One repo, three install targets:
+The Herdr mods live here:
 
 | Path | Installs to | How |
 |---|---|---|
@@ -17,17 +17,16 @@ One repo, three install targets:
 | `mod-inbox/` | `$HERDR_APP_HOME/mods/peruse-inbox` (opens the inbox) | the same way, with `mod/` |
 | `mod-settings/` | `$HERDR_APP_HOME/mods/peruse-settings` (opens the settings window) | the same way, with `mod/` |
 | `mod-compat/` | `$HERDR_APP_HOME/mods/review` (the old name: forwards to `peruse`) | the same way, with `mod/` |
-| `.claude-plugin/` + `integrations/claude/` | Claude Code marketplace `herdr-local`, plugin `herdr-peruse` | `claude plugin` CLI; Claude caches a copy per version |
-| `integrations/pi/` | pi package in `~/.pi/agent/settings.json` | `pi install`; loaded live from this repo |
 
-The Herdr mod is the hub. The Claude hooks, the `peruse` skill and the pi extension all
-load `mods/peruse/bin/bridge.mjs` from the Herdr app folder, so install the `herdr` target first.
+The agent side (the Claude Code plugin with its hooks and `peruse` skill, and the pi extension) is a separate,
+opt-in plugin: [`plugins/peruse`](../plugins/peruse/README.md), installed from the repo root with
+`./install.sh install plugins peruse [claude|pi]`. It loads `mods/peruse/bin/bridge.mjs` from the Herdr app
+folder, so install these mods first.
 
 ## Install
 
 ```sh
-node install.mjs install          # all targets
-node install.mjs install herdr    # or one: herdr | claude | pi
+node install.mjs install          # the mods (same as `./install.sh install peruse` at the repo root)
 node install.mjs status           # exit 0 when everything is current
 ```
 
@@ -220,21 +219,17 @@ pi tool's `place`). If a floating window can't open, the review falls back to a 
 
 - **Mod** (`mod/`): edit, then `node install.mjs sync herdr`. It mirrors the files, leaves Herdr's
   own `jsconfig.json` / `*.d.ts` alone and runs `herdr-app check`. Herdr hot-reloads the change.
-- **Claude plugin** (`integrations/claude/`): Claude runs a cached copy and only refreshes it when
-  the version changes. Run `node install.mjs bump patch`, then `sync claude`, then restart Claude
-  sessions. `sync` refuses when the plugin files changed but the version didn't
-  (`--force` reinstalls at the same version).
-- **pi** (`integrations/pi/`): loaded straight from this repo. Restart pi sessions to reload.
+- **Agent plugin**: see [`plugins/peruse`](../plugins/peruse/README.md#workflow).
 - **Settings**: add a setting to `mod/config.defaults.json` (plus a rule in `mod/config-core.js` if it needs one),
   then run `node scripts/config-schema.mjs` to regenerate the schema.
 
-`node install.mjs version 1.0.0` / `bump patch|minor|major` writes the version into
-`package.json`, `.claude-plugin/marketplace.json`, the Claude `plugin.json` and the pi `package.json`.
+`node install.mjs version 1.0.0` / `bump patch|minor|major` sets the mods' version in `package.json`.
+The plugin has its own version (`./install.sh bump peruse patch`).
 
 ## Uninstall
 
-`node install.mjs uninstall [target]` removes the mod folder, the Claude plugin and marketplace,
-and the pi entry. Review history in `$HERDR_APP_HOME/data/peruse` is kept.
+`node install.mjs uninstall` removes the mod folders (it warns if the agent plugin is still installed:
+`./install.sh uninstall plugins peruse`). Review history in `$HERDR_APP_HOME/data/peruse` is kept.
 
 ## Migrating from herdr-review
 
@@ -247,5 +242,6 @@ as a target name) moves everything over:
   started before the rename.
 - keys.json bindings to `review`, `review-inbox` and `review.*` commands now name `peruse` (backup:
   `keys.json.bak-peruse`).
-- The Claude plugin `herdr-review` is replaced by `herdr-peruse` (its skill `request-review` is now `peruse`), and pi's
-  entry is repointed (its `request_review` tool is now `peruse`). Restart Claude and pi sessions afterwards.
+- The agent plugin is migrated by `./install.sh install plugins peruse`: Claude's `herdr-review@herdr-local` (or
+  `herdr-peruse@herdr-local`) becomes `herdr-peruse@agentctl` (its skill `request-review` is now `peruse`), and
+  pi's entry is repointed (its `request_review` tool is now `peruse`). Restart Claude and pi sessions afterwards.

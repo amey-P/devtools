@@ -2,7 +2,7 @@
   "// why": [
     "The Node scripts: installers, bridges, hooks, scanners. Mod folders have their own tsconfig.json",
     "(QuickJS, not Node), so the editor uses those for mod code and this one for everything else.",
-    "integrations/pi/index.ts is @ts-nocheck: its pi dependency isn't installed in this repo."
+    "plugins/peruse/pi/index.ts is @ts-nocheck: its pi dependency isn't installed in this repo."
   ],
   "compilerOptions": {
     "target": "ES2022",

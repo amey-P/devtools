@@ -8,8 +8,8 @@ One repo for everything custom around my coding agents: mods, layouts and agent 
 | `herdr-minimal/` | The minimal layout and the space-icons mod | `layouts/minimal.{json,svg}`, `mods/space-icons` |
 | `herdr-sidebar/` | Space-tree sidebar mod, used by the minimal layout | `mods/space-tree` |
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
-| `herdr-peruse/` | Peruse: read and annotate any markdown (agent docs, plans, quick decisions), its inbox and settings | `mods/peruse`, `mods/peruse-inbox`, `mods/peruse-settings`, plus `mods/review` (a shim for the old name; see [its README](herdr-peruse/README.md)) |
-| *agents* (opt-in) | The coding-agent integrations: herdr-peruse's Claude Code plugin (hooks, skills) and pi extension | Claude Code's `herdr-local` marketplace, pi's settings |
+| `herdr-peruse/` | Peruse mods: read and annotate any markdown (agent docs, plans, quick decisions), its inbox and settings | `mods/peruse`, `mods/peruse-inbox`, `mods/peruse-settings`, plus `mods/review` (a shim for the old name; see [its README](herdr-peruse/README.md)) |
+| `plugins/` → *plugins* (opt-in) | Coding-agent plugins, each installable into several agents. `plugins/peruse`: peruse's Claude Code plugin (hooks, skill) and pi extension, from one folder ([README](plugins/peruse/README.md)) | Claude Code's `agentctl` marketplace, pi's settings |
 | `agents/` → *links* (opt-in) | pi powerline statusline extension, Claude Code statusline, custom skills (`explainer`, `git`), symlinked so edits apply at once | `~/.pi/agent/extensions/`, `~/.claude/statusline.sh`, `~/.agents/skills/` |
 | `herdr-subagents-mcp/` | Rust MCP server pi uses to spawn and steer herdr subagents (build with `cargo build --release`) | referenced from `~/.pi/agent/mcp.json` |
 
@@ -25,7 +25,17 @@ git clone https://github.com/amey-P/devtools.git agentctl && cd agentctl
 ./install.sh uninstall [target]
 ```
 
-**Agent integrations are opt-in.** `install` never touches Claude Code or pi configuration on its own. Opt in with `./install.sh install agents` (both, where `claude` / `pi` is on PATH) or `./install.sh install agents claude|pi`. After that, `./install.sh install` keeps the opted-in ones current, and `status` checks them (the rest show as "not opted in" and don't affect the exit code). `./install.sh uninstall agents [claude|pi]` opts out. Being installed is what counts as opted in, so there's no state file.
+**Agent plugins are opt-in and kept apart from the mods.** `install`, `status` and every mod target leave Claude Code and pi alone. A plugin is a folder under `plugins/`; its targets come from what's in it (`.claude-plugin/plugin.json` for Claude, a `"pi"` field in `package.json` for pi).
+
+```sh
+./install.sh install plugins peruse [claude|pi]   # opt in: every agent on PATH, or one
+./install.sh install plugins                      # refresh whatever is installed (never adds one)
+./install.sh status plugins [peruse]              # ● current  ◐ differs  · not installed
+./install.sh uninstall plugins [peruse] [claude|pi]
+./install.sh bump peruse patch                    # after editing it: Claude caches plugins by version
+```
+
+Being installed is what counts as opted in, so there's no state file. A plugin that needs a Herdr mod (peruse needs the peruse mods) only warns when it's missing; install the mod with its own target. The old `agents` target still works and maps to `plugins`. The logic lives in `scripts/plugins.mjs`.
 
 **Agent configs are opt-in too.** `./install.sh install links` symlinks `agents/` into `~/.pi`, `~/.claude` and `~/.agents` (an existing real file is moved to `~/.local/state/agentctl/backup/`, not beside it, where pi or the skill loader would still pick it up); `status links` and `uninstall links` work the same way. Unlike Herdr mods these load fine through a symlink, so there's nothing to re-sync. The list lives in `scripts/links.mjs`.
 
@@ -46,7 +56,7 @@ That clones into `%LOCALAPPDATA%\herdr-devtools`. Both scripts only bootstrap: t
 
 The bootstrap clones into `~/.local/share/herdr-devtools`, or pulls there if a clone already exists, and then runs that copy's `install.sh`.
 
-**Requirements:** Node.js 18+, and `git` for the bootstrap. Nothing else: no rsync, no bash on Windows. When Node is missing, the scripts print the install command for your OS (brew, apt, dnf, pacman, apk, zypper or winget). Herdr's home is `HERDR_APP_HOME`, else what `herdr-app --help` reports, else `~/.config/herdr-app`. The `agents` target sets up the Claude and pi integrations only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
+**Requirements:** Node.js 18+, and `git` for the bootstrap. Nothing else: no rsync, no bash on Windows. When Node is missing, the scripts print the install command for your OS (brew, apt, dnf, pacman, apk, zypper or winget). Herdr's home is `HERDR_APP_HOME`, else what `herdr-app --help` reports, else `~/.config/herdr-app`. The `plugins` target installs into Claude and pi only when `claude` or `pi` is on PATH. When `herdr-app` is on PATH, each mod is validated with `herdr-app check`.
 
 | Variable | Default | |
 |---|---|---|

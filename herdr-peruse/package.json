@@ -3,7 +3,7 @@
   "version": "0.5.2",
   "private": true,
   "type": "module",
-  "description": "Peruse: read and annotate any markdown in the Herdr app: documents and long answers agents hand you, plans to approve, and quick decisions to click. The herdr-app mods, a Claude Code plugin and a pi extension, installed from one repo.",
+  "description": "Peruse: read and annotate any markdown in the Herdr app: documents and long answers agents hand you, plans to approve, and quick decisions to click. The herdr-app mods; the agent plugins live in ../plugins/peruse.",
   "bin": {
     "herdr-peruse": "./install.mjs"
   },

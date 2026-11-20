@@ -1,27 +1,27 @@
 #!/usr/bin/env node
-// herdr-peruse installer: one repo, three targets.
+// herdr-peruse installer: the Herdr mods, their settings and the peruse CLI.
+// The Claude Code plugin and pi extension are plugins/peruse, installed with
+// `./install.sh install plugins peruse` at the repo root.
 //
 //   herdr   mod/                  → $HERDR_APP_HOME/mods/peruse   (copy, or --link for a symlink)
 //           mod-inbox/            → $HERDR_APP_HOME/mods/peruse-inbox   (the inbox toggle, ctrl-shift-i)
 //           mod-settings/         → $HERDR_APP_HOME/mods/peruse-settings   (opens the settings window)
 //           mod-compat/           → $HERDR_APP_HOME/mods/review   (forwards the old mod name, e.g. Herdr's markdown
 //                                   viewer's Review button, to peruse)
-//   claude  .claude-plugin/ + integrations/claude  → Claude Code marketplace "herdr-local"
-//   pi      integrations/pi       → pi package (loaded live from this repo)
 //
-// Usage: node install.mjs <command> [herdr|claude|pi|all] [--link] [--force]
+// Usage: node install.mjs <command> [herdr] [--link]
 //   install | sync     install or bring a target up to date (default target: all)
 //   status             what's installed where, and whether it's current
-//   installed <target> exit 0 if that target is installed (for scripts)
+//   installed herdr    exit 0 if the mods are installed (for scripts)
 //   uninstall          remove from a target (the spool in data/peruse is kept)
 //   open <file> [--place P]   open any markdown file to read and annotate (the installed mods/peruse/bin/peruse.mjs)
-//   version <x.y.z>    set the version in every manifest
+//   version <x.y.z>    set the mods' version (package.json)
 //   bump patch|minor|major
 //   config [key [value|--reset]]   show or set a setting (window.place, ui.font, prompts.deny, …; see README)
 //   config path | edit             print the settings file, or open it in $EDITOR
 //
-// Every integration loads the bridge from $HERDR_APP_HOME/mods/peruse/bin/bridge.mjs,
-// so the herdr target must be installed for claude and pi to work.
+// The agent plugins load the bridge from $HERDR_APP_HOME/mods/peruse/bin/bridge.mjs,
+// so these mods must be installed for them to work.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -39,12 +39,6 @@ import { CONFIG_FILE, describeConfig, ensureConfigFile, loadConfig, resolvePath,
 /** @typedef {{ installed: boolean, current?: boolean, stale?: boolean, line: string }} Status */
 /** An entry of @see MODS, or the bundle piped into modInstall. */
 /** @typedef {{ name: string, src: string, dest: string }} ModInfo */
-/** `claude plugin list --json` entry. */
-/** @typedef {{ id: string, version: string, installPath: string, enabled: boolean }} ClaudePlugin */
-/** `claude plugin marketplace list --json` entry. */
-/** @typedef {{ name: string, path: string }} ClaudeMarket */
-/** A pi settings entry: the raw setting and where it resolves to. */
-/** @typedef {{ raw: string, abs: string }} PiEntry */
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 const APP_HOME = process.env.HERDR_APP_HOME || join(homedir(), ".config", "herdr-app");
@@ -62,22 +56,10 @@ const MODS = [
 const LEGACY_MODS = ["review-inbox", "review-settings"].map((n) => join(APP_HOME, "mods", n));
 const LEGACY_SPOOL = join(APP_HOME, "data", "review");
 const SPOOL = join(APP_HOME, "data", "peruse");
-const MARKETPLACE = "herdr-local";
-const PLUGIN = "herdr-peruse";
-const PLUGIN_ID = `${PLUGIN}@${MARKETPLACE}`;
-const LEGACY_PLUGIN_ID = `herdr-review@${MARKETPLACE}`;
-const CLAUDE_SRC = join(REPO, "integrations", "claude");
-const PI_SRC = join(REPO, "integrations", "pi");
-const PI_SETTINGS = join(homedir(), ".pi", "agent", "settings.json");
 // Files Herdr writes into a mod folder; never copied, never deleted.
 // Plus the dev-only type-checking files (npm run typecheck), which the runtime never reads.
 const HERDR_OWNED = new Set(["jsconfig.json", "gpui-kit.d.ts", "herdr.d.ts", ".installed.json", "tsconfig.json", "types.d.ts"]);
-const MANIFESTS = [
-  "package.json",
-  "integrations/claude/.claude-plugin/plugin.json",
-  "integrations/pi/package.json",
-];
-const TARGETS = ["herdr", "claude", "pi"];
+const TARGETS = ["herdr"];
 
 /** @type {Record<"ok" | "warn" | "err" | "dim", (s: string) => string>} */
 const c = process.stdout.isTTY
@@ -95,7 +77,7 @@ const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } ca
 const writeJson = (p, v) => writeFileSync(p, JSON.stringify(v, null, 2) + "\n");
 const WIN = process.platform === "win32";
 /**
- * spawnSync that also starts Windows .cmd/.bat shims (claude, pi from npm are shims, and
+ * spawnSync that also starts Windows .cmd/.bat shims (npm-installed programs are shims, and
  * Node won't run those without a shell). Missing programs still report ENOENT.
  * @param {string} cmd
  * @param {string[]} args
@@ -322,171 +304,15 @@ function herdrUninstall() {
   log(`  (spool in ${join(APP_HOME, "data", "peruse")} kept; key bindings in keys.json left as they are)`);
 }
 
-// ---------------------------------------------------------------- claude
-
-/** @returns {{ plugin?: ClaudePlugin, market?: ClaudeMarket, legacy?: ClaudePlugin }} */
-function claudeState() {
-  /** @type {ClaudePlugin[]} */
-  const plugins = JSON.parse(sh("claude", ["plugin", "list", "--json"], { quiet: true }).stdout || "[]");
-  /** @type {ClaudeMarket[]} */
-  const markets = JSON.parse(sh("claude", ["plugin", "marketplace", "list", "--json"], { quiet: true }).stdout || "[]");
-  return { plugin: plugins.find((p) => p.id === PLUGIN_ID), market: markets.find((m) => m.name === MARKETPLACE),
-    legacy: plugins.find((p) => p.id === LEGACY_PLUGIN_ID) };
-}
-
-/** @returns {Status} */
-function claudeStatus() {
-  if (!has("claude")) return { installed: false, line: "claude not on PATH" };
-  const { plugin, market, legacy } = claudeState();
-  // Still the plugin's old name: opted in, and out of date until `install` swaps it.
-  if (!plugin && legacy) return { installed: true, current: false, line: `${LEGACY_PLUGIN_ID} ${legacy.version} (old name; install replaces it)` };
-  if (!market) return { installed: false, line: "marketplace not added" };
-  /** @type {string[]} */
-  const parts = [];
-  const marketOk = market.path === REPO;
-  if (!marketOk) parts.push(`marketplace points at ${market.path}`);
-  if (!plugin) return { installed: false, line: [...parts, "plugin not installed"].join("; ") };
-  const stale = plugin.version === version() && existsSync(plugin.installPath)
-    && treeHash(CLAUDE_SRC) !== treeHash(plugin.installPath);
-  const current = marketOk && plugin.version === version() && !stale && plugin.enabled;
-  parts.unshift(`${plugin.version}${plugin.enabled ? "" : " (disabled)"}`);
-  if (plugin.version !== version()) parts.push(`repo is ${version()}`);
-  if (stale) parts.push("plugin files changed without a version bump");
-  return { installed: true, current, stale, line: parts.join("; ") };
-}
-
-/** @param {{ force?: boolean }} opts @returns {void} */
-function claudeInstall({ force }) {
-  if (!has("claude")) { log(c.warn("  claude not on PATH; skipped")); return; }
-  let { plugin, market } = claudeState();
-  if (market && market.path !== REPO) {
-    log(`  repointing marketplace ${MARKETPLACE}: ${market.path} → ${REPO}`);
-    sh("claude", ["plugin", "marketplace", "remove", MARKETPLACE]);
-    market = null;
-    plugin = claudeState().plugin;
-  }
-  if (!market) sh("claude", ["plugin", "marketplace", "add", REPO]);
-  else sh("claude", ["plugin", "marketplace", "update", MARKETPLACE]);
-  // The plugin was called herdr-review before the rename: its hooks would answer plans twice.
-  if (claudeState().legacy) {
-    sh("claude", ["plugin", "uninstall", LEGACY_PLUGIN_ID], { allowFail: true });
-    log(`  removed old ${LEGACY_PLUGIN_ID}`);
-  }
-
-  if (plugin && plugin.version === version() && existsSync(plugin.installPath)
-      && treeHash(CLAUDE_SRC) !== treeHash(plugin.installPath) && !force) {
-    die(`Claude plugin files changed but the version is still ${version()}; Claude keeps its cached copy.\n`
-      + `  Run: node install.mjs bump patch   (or pass --force to reinstall at the same version)`);
-  }
-  if (!plugin) sh("claude", ["plugin", "install", PLUGIN_ID]);
-  else if (force && plugin.version === version()) {
-    sh("claude", ["plugin", "uninstall", PLUGIN_ID]);
-    sh("claude", ["plugin", "install", PLUGIN_ID]);
-  } else if (plugin.version !== version()) sh("claude", ["plugin", "update", PLUGIN_ID]);
-  else { log(c.dim(`  ${PLUGIN_ID} ${plugin.version} already current`)); if (plugin.enabled) return; }
-  if (plugin && !plugin.enabled) sh("claude", ["plugin", "enable", PLUGIN_ID]);
-  log(`  ${c.ok(`${PLUGIN_ID} ${version()}`)} (restart Claude sessions to load hook changes)`);
-}
-
-/** @returns {void} */
-function claudeUninstall() {
-  if (!has("claude")) return;
-  const { plugin, market, legacy } = claudeState();
-  if (plugin) sh("claude", ["plugin", "uninstall", PLUGIN_ID]);
-  if (legacy) sh("claude", ["plugin", "uninstall", LEGACY_PLUGIN_ID], { allowFail: true });
-  if (market) sh("claude", ["plugin", "marketplace", "remove", MARKETPLACE]);
-  log("  removed plugin and marketplace");
-}
-
-// ---------------------------------------------------------------- pi
-
-/** A pi `packages` entry: a path string, or {source, extensions…}. @typedef {string | { source?: string }} PiRaw */
-/** @param {PiRaw} p @returns {string | null} */
-const piSource = (p) => (typeof p === "string" ? p : typeof p?.source === "string" ? p.source : null);
-/** @param {string} src @returns {string} */
-const piAbs = (src) => resolve(dirname(PI_SETTINGS), src.replace(/^~(?=[\\/])/, homedir()));
-
-/** pi settings entries that are this package (this repo, the old herdr-review folder, or the old in-mod location).
- *  @returns {PiEntry[]} */
-function piEntries() {
-  /** @type {{ packages?: PiRaw[] }} */
-  const s = readJson(PI_SETTINGS);
-  return (s?.packages ?? []).flatMap((p) => {
-    const src = piSource(p);
-    if (!src || /^(npm|git|https?|ssh):/.test(src)) return [];
-    const abs = piAbs(src);
-    const ours = abs === PI_SRC || [PLUGIN, "herdr-review"].includes(readJson(join(abs, "package.json"))?.name)
-      || abs.endsWith(join("mods", "review", "integrations", "pi")) || abs.endsWith(join("herdr-review", "integrations", "pi"));
-    return ours ? [{ raw: JSON.stringify(p), abs }] : [];
-  });
-}
-
-/** @returns {Status} */
-function piStatus() {
-  if (!existsSync(PI_SETTINGS)) return { installed: false, line: `no ${PI_SETTINGS}` };
-  const entries = piEntries();
-  if (!entries.length) return { installed: false, line: "not in pi settings" };
-  const current = entries.length === 1 && entries[0].abs === PI_SRC;
-  return { installed: true, current, line: current ? `live from ${PI_SRC}` : `entries: ${entries.map((e) => e.abs).join(", ")}` };
-}
-
-/** Remove matching entries from pi's settings directly: `pi remove` resolves relative
- *  paths against the cwd and can't match an entry whose folder is gone. */
-/** @param {(e: PiEntry) => boolean} pred @returns {void} */
-function dropPiEntries(pred) {
-  const drop = new Set(piEntries().filter(pred).map((e) => e.raw));
-  if (!drop.size) return;
-  /** @type {{ packages: PiRaw[] }} */
-  const s = readJson(PI_SETTINGS);
-  s.packages = s.packages.filter((p) => !drop.has(JSON.stringify(p)));
-  writeJson(PI_SETTINGS, s);
-  for (const raw of drop) log(`  removed pi entry ${raw}`);
-}
-
-/** Entries pointing at the old herdr-review folder now point here, keeping their shape (extension filters).
- *  @returns {void} */
-function repointPiEntries() {
-  if (piEntries().some((e) => e.abs === PI_SRC)) return;
-  const old = piEntries()[0];
-  if (!old || existsSync(old.abs)) return;
-  /** @type {{ packages: PiRaw[] }} */
-  const s = readJson(PI_SETTINGS);
-  const rel = relative(dirname(PI_SETTINGS), PI_SRC);
-  s.packages = s.packages.map((p) => JSON.stringify(p) !== old.raw ? p : typeof p === "string" ? rel : { ...p, source: rel });
-  writeJson(PI_SETTINGS, s);
-  log(`  pi entry now points at ${PI_SRC}`);
-}
-
-/** @returns {void} */
-function piInstall() {
-  if (!has("pi")) { log(c.warn("  pi not on PATH; skipped")); return; }
-  repointPiEntries();
-  dropPiEntries((e) => e.abs !== PI_SRC);
-  if (!piEntries().some((e) => e.abs === PI_SRC)) sh("pi", ["install", PI_SRC]);
-  log(`  ${c.ok(`pi loads ${PI_SRC}`)} (restart pi sessions to reload)`);
-}
-
-/** @returns {void} */
-function piUninstall() {
-  if (!has("pi")) return;
-  dropPiEntries(() => true);
-  log("  removed from pi settings");
-}
-
 // ---------------------------------------------------------------- versions
 
 /** @param {string} v @returns {void} */
 function setVersion(v) {
   if (!/^\d+\.\d+\.\d+$/.test(v)) die(`not a version: ${v}`);
-  for (const f of MANIFESTS) {
-    const p = join(REPO, f), j = readJson(p);
-    j.version = v;
-    writeJson(p, j);
-  }
-  const mp = join(REPO, ".claude-plugin", "marketplace.json"), m = readJson(mp);
-  for (const p of m.plugins) if (p.name === PLUGIN) p.version = v;
-  writeJson(mp, m);
-  log(`version ${v} written to ${MANIFESTS.length + 1} manifests`);
+  const p = join(REPO, "package.json"), j = readJson(p);
+  j.version = v;
+  writeJson(p, j);
+  log(`version ${v} written to package.json`);
 }
 
 /** @param {string} kind @returns {void} */
@@ -503,12 +329,10 @@ const argv = process.argv.slice(2);
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const [cmd, arg] = argv.filter((a) => !a.startsWith("--"));
 const targets = !arg || arg === "all" ? TARGETS : TARGETS.includes(arg) ? [arg] : null;
-const opts = { link: flags.has("--link"), force: flags.has("--force") };
+const opts = { link: flags.has("--link") };
 /** @type {Record<string, { status: () => Status, install: () => void, uninstall: () => void }>} */
 const impl = {
   herdr: { status: herdrStatus, install: () => herdrInstall(opts), uninstall: herdrUninstall },
-  claude: { status: claudeStatus, install: () => claudeInstall(opts), uninstall: claudeUninstall },
-  pi: { status: piStatus, install: piInstall, uninstall: piUninstall },
 };
 
 switch (cmd) {
@@ -531,8 +355,8 @@ switch (cmd) {
     process.exit(ok ? 0 : 2);
   }
   case "installed":
-    // Exit 0 when the target is installed (current or not): how ../install.sh tells opted-in agents apart.
-    if (!targets || targets.length !== 1) die("installed herdr|claude|pi");
+    // Exit 0 when the mods are installed (current or not).
+    if (!targets || targets.length !== 1) die("installed herdr");
     process.exit(impl[targets[0]].status().installed ? 0 : 1);
   case "uninstall":
     if (!targets) die(`unknown target ${arg}`);

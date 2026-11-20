@@ -1,17 +1,17 @@
 {
-  "name": "herdr-local",
+  "name": "agentctl",
   "owner": {
     "name": "Amey Patil"
   },
   "metadata": {
-    "description": "Local plugins for the Herdr app"
+    "description": "Coding-agent plugins from agentctl"
   },
   "plugins": [
     {
       "name": "herdr-peruse",
-      "source": "./integrations/claude",
+      "source": "./plugins/peruse",
       "description": "Read and annotate any markdown in the Herdr app: documents and long answers agents hand you, and quick decisions to click.",
-      "version": "0.5.2"
+      "version": "0.6.1"
     }
   ]
 }

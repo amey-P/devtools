@@ -2,17 +2,21 @@
 // herdr-app devtools: install every Herdr mod, layout and integration in this repo.
 // Node 18+, no other tools: works the same on macOS, Linux and Windows.
 //
-//   node install.mjs [command] [target] [agent]
+//   node install.mjs [command] [target] [plugin] [agent]
 //     install    copy into Herdr's home (default command)
 //     status     what's installed, and whether it matches the repo
 //     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 //     uninstall  remove what this repo installed (layouts are left alone)
-//   targets: all (default) | git | minimal | sidebar | usage | peruse | agents | links
-//   agents is opt-in and never part of `all`: it adds the coding-agent integrations
-//   (the herdr-peruse Claude Code plugin and pi extension). `install agents [claude|pi]`
-//   opts in; after that, `install` keeps them current. `uninstall agents [claude|pi]` opts out.
-//   links is opt-in too: it symlinks agents/ (pi and Claude statuslines, custom skills) into
-//   ~/.pi, ~/.claude and ~/.agents (see scripts/links.mjs).
+//   targets: all (default) | git | minimal | sidebar | usage | peruse | plugins | links
+//   `all` is the Herdr mods and layouts only. plugins and links are opt-in and never part of it:
+//   plugins  coding-agent plugins from plugins/ (see scripts/plugins.mjs):
+//              install plugins <name> [claude|pi]   opt in (every agent on PATH, or one)
+//              install plugins                      refresh the ones already installed
+//              uninstall plugins [name] [claude|pi] opt out;  status plugins [name]
+//              bump <name> patch|minor|major        after changing a plugin (Claude caches by version)
+//   links    symlinks agents/ (pi and Claude statuslines, custom skills) into ~/.pi, ~/.claude
+//            and ~/.agents (see scripts/links.mjs).
+//   --force  reinstall a Claude plugin at the same version
 //
 // install.sh (macOS/Linux) and install.ps1 (Windows) bootstrap a clone and run this.
 //
@@ -31,11 +35,11 @@ import { delimiter, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keys } from "./scripts/keys.mjs";
 import { installLinks, statusLinks, uninstallLinks } from "./scripts/links.mjs";
+import { AGENTS, bumpPlugin, dependents, discover, installPlugins, statusPlugins, uninstallPlugins } from "./scripts/plugins.mjs";
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 const WIN = platform() === "win32";
 const TARGETS = ["git", "minimal", "sidebar", "usage", "peruse"]; // what `all` means
-const AGENTS = ["claude", "pi"];                                   // `agents` (opt-in)
 
 // ---------------------------------------------------------------- output
 
@@ -210,7 +214,7 @@ const SPEC = {
 const modPatterns = (m) => [...EXCLUDES, ...(m.exclude ?? [])];
 const KEYS = join(HOME, "keys.json");
 
-// herdr-peruse has its own installer (mods, the Claude plugin, the pi package).
+// herdr-peruse has its own installer (its mods, settings and CLI).
 /** @param {string[]} args @param {boolean} [inherit] */
 const peruse = (args, inherit = false) => run(process.execPath, [join(REPO, "herdr-peruse", "install.mjs"), ...args], { inherit, env: { ...process.env, HERDR_APP_HOME: HOME } });
 /** Prints a peruse-installer result without its version header. @param {{ stdout: string, stderr: string }} r */
@@ -219,8 +223,6 @@ const relay = (r) => {
   if (out) say(out);
   if (r.stderr.trim()) warn(r.stderr.trim());
 };
-/** Opted in = installed: no state file to drift. @param {string} agent */
-const agentOn = (agent) => peruse(["installed", agent]).code === 0;
 
 /** @param {string} dir */
 function herdrCheck(dir) {
@@ -266,25 +268,10 @@ function ensureBinding(b) {
 
 // ---------------------------------------------------------------- commands
 
-/** @param {string} t @param {string[]} agents */
-function installTarget(t, agents) {
+/** @param {string} t */
+function installTarget(t) {
   if (t === "links") { installLinks(say, warn); return; }
-  if (t === "peruse") {
-    say("peruse:");
-    relay(peruse(["install", "herdr"]));
-    // Agents someone opted into stay current; nobody gets one by default.
-    for (const a of AGENTS) if (agentOn(a)) relay(peruse(["install", a]));
-    return;
-  }
-  if (t === "agents") {
-    say("agents:");
-    if (peruse(["installed", "herdr"]).code !== 0) relay(peruse(["install", "herdr"])); // every integration loads the peruse bridge
-    for (const a of agents) {
-      if (has(a)) relay(peruse(["install", a]));
-      else warn(`  ${a} not on PATH; skipped (install it, then: install agents ${a})`);
-    }
-    return;
-  }
+  if (t === "peruse") { say("peruse:"); relay(peruse(["install", "herdr"])); return; }
   const spec = SPEC[/** @type {keyof typeof SPEC} */ (t)];
   say(`${t}:`);
   if (spec.needsNode && !has("node")) warn(`  node not found on PATH; ${spec.needsNode} (installing anyway)`);
@@ -304,21 +291,11 @@ function show(label, state) {
   return state === "current";
 }
 
-/** @param {string} t @param {string[]} agents @param {boolean} explicitAgents */
-function statusTarget(t, agents, explicitAgents) {
+/** @param {string} t */
+function statusTarget(t) {
   if (t === "links") return statusLinks(show);
   let ok = true;
-  if (t === "peruse" || t === "agents") {
-    const list = t === "peruse" ? ["herdr"] : agents;
-    for (const x of list) { const r = peruse(["status", x]); relay(r); if (r.code !== 0) ok = false; }
-    if (t === "peruse" && !explicitAgents) {
-      for (const a of AGENTS) {
-        if (agentOn(a)) { const r = peruse(["status", a]); relay(r); if (r.code !== 0) ok = false; }
-        else say(c.dim(`  · ${a.padEnd(6)} not opted in (install agents ${a})`));
-      }
-    }
-    return ok;
-  }
+  if (t === "peruse") { const r = peruse(["status", "herdr"]); relay(r); return r.code === 0; }
   const spec = SPEC[/** @type {keyof typeof SPEC} */ (t)];
   for (const m of spec.mods) {
     const dst = join(HOME, "mods", m.name);
@@ -340,17 +317,16 @@ function statusTarget(t, agents, explicitAgents) {
   return ok;
 }
 
-/** @param {string} t @param {string[]} agents */
-function uninstallTarget(t, agents) {
+/** @param {string} t */
+function uninstallTarget(t) {
   if (t === "links") { uninstallLinks(say); return; }
   if (t === "peruse") {
     say("peruse:");
-    const on = AGENTS.filter(agentOn);
-    if (on.length) warn(`  agents still installed: ${on.join(", ")} — they need the peruse mod; remove them with: uninstall agents`);
+    const on = dependents(IO, "peruse");
+    if (on.length) warn(`  still installed and needing this mod: ${on.join(", ")} (remove with: uninstall plugins)`);
     relay(peruse(["uninstall", "herdr"]));
     return;
   }
-  if (t === "agents") { say("agents:"); for (const a of agents) relay(peruse(["uninstall", a])); return; }
   const spec = SPEC[/** @type {keyof typeof SPEC} */ (t)];
   for (const m of spec.mods) { rmSync(join(HOME, "mods", m.name), { recursive: true, force: true }); say(`removed mods/${m.name}`); }
   for (const b of spec.bindings ?? []) {
@@ -371,7 +347,6 @@ function watch(targets) {
   const jobs = [];
   for (const t of targets) {
     if (t === "links") { say(c.dim("links are symlinks: edits apply without a sync")); continue; }
-    if (t === "agents") { say(c.dim("agents load from their install location; re-run install agents after changes")); continue; }
     if (t === "peruse") {
       jobs.push({ name: t, dirs: ["mod", "mod-inbox", "mod-settings", "mod-compat"].map((d) => join(REPO, "herdr-peruse", d)), last: "",
         sync: () => relay(peruse(["sync", "herdr"])) });
@@ -399,17 +374,59 @@ function usage() {
   say(text.slice(1, end - 1).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
 }
 
+/** What scripts/plugins.mjs prints and fails through. @type {import("./scripts/plugins.mjs").IO} */
+const IO = { say, warn, ok: c.ok, dim: c.dim, die };
+/** @param {{ installed: boolean, current?: boolean }} s */
+const mark = (s) => (!s.installed ? c.dim("·") : s.current ? c.ok("●") : c.warn("◐"));
+
+/**
+ * The plugins target: `<cmd> plugins [name] [agent]`. The old `agents [claude|pi]` maps here.
+ * @param {string} cmd @param {string[]} rest @param {boolean} legacy
+ */
+function pluginsCommand(cmd, rest, legacy) {
+  const isAgent = (/** @type {string} */ a) => /** @type {readonly string[]} */ (AGENTS).includes(a);
+  let [name, agent] = rest;
+  if (legacy) { agent = name; name = undefined; warn("`agents` is now `plugins`: install plugins <name> [claude|pi]"); }
+  else if (name && isAgent(name) && !agent) { agent = name; name = undefined; }
+  if (agent && !isAgent(agent)) die(`unknown agent '${agent}' (${AGENTS.join(" | ")})`);
+  const a = /** @type {"claude" | "pi" | undefined} */ (agent);
+  switch (cmd) {
+    case "install":
+    case "sync": {
+      const force = process.argv.includes("--force");
+      // `install agents` used to opt into everything: name every plugin so it installs, not just refreshes.
+      if (legacy) { for (const { name: n } of discover()) installPlugins(IO, { name: n, agent: a, force, appHome: HOME }); }
+      else installPlugins(IO, { name, agent: a, force, appHome: HOME });
+      say(c.ok("done"));
+      return;
+    }
+    case "status":
+      say("plugins:");
+      process.exit(statusPlugins(IO, { name, agent: a, mark }) ? 0 : 2);
+    case "uninstall":
+      uninstallPlugins(IO, { name, agent: a });
+      return;
+    case "watch":
+      say(c.dim("plugins: pi loads them live; for Claude, bump the version and run install plugins"));
+      return;
+    default:
+      usage();
+      process.exit(1);
+  }
+}
+
 function main() {
   const [major] = process.versions.node.split(".").map(Number);
   if (major < 18) die(`Node.js 18+ is required (this is ${process.version})`);
-  const [cmd = "install", rawTarget = "all", agent] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+  const [cmd = "install", rawTarget = "all", ...rest] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
   const target = rawTarget === "review" ? "peruse" : rawTarget; // herdr-review was renamed herdr-peruse
   if (["-h", "--help", "help"].includes(process.argv[2] ?? "")) { usage(); return; }
-  const valid = [...TARGETS, "agents", "links"];
+  if (cmd === "bump") { bumpPlugin(IO, rawTarget, rest[0] ?? "patch"); return; }
+  if (target === "plugins" || target === "agents") { pluginsCommand(cmd, rest, target === "agents"); return; }
+  const valid = [...TARGETS, "plugins", "links"];
   if (target !== "all" && !valid.includes(target)) die(`unknown target '${target}' (all | ${valid.join(" | ")})`);
-  if (agent && (target !== "agents" || !AGENTS.includes(agent))) die(`unknown agent '${agent}' (agents ${AGENTS.join(" | ")})`);
+  if (rest.length) die(`unexpected '${rest.join(" ")}' after ${target}`);
   const targets = target === "all" ? TARGETS : [target];
-  const agents = agent ? [agent] : AGENTS;
 
   switch (cmd) {
     case "install":
@@ -418,13 +435,14 @@ function main() {
       mkdirSync(join(HOME, "mods"), { recursive: true });
       mkdirSync(join(HOME, "layouts"), { recursive: true });
       say(c.dim(`herdr home: ${HOME}  (${process.platform})`));
-      for (const t of targets) installTarget(t, agents);
+      for (const t of targets) installTarget(t);
       say(c.ok("done"));
       break;
     case "status": {
       say(c.dim(`herdr home: ${HOME}`));
       let ok = true;
-      for (const t of targets) ok = statusTarget(t, agents, target === "agents") && ok;
+      for (const t of targets) ok = statusTarget(t) && ok;
+      if (target === "all") say(c.dim("plugins and links are opt-in: status plugins | status links"));
       process.exit(ok ? 0 : 2);
     }
     case "watch":
@@ -432,7 +450,7 @@ function main() {
       watch(targets);
       break;
     case "uninstall":
-      for (const t of targets) uninstallTarget(t, agents);
+      for (const t of targets) uninstallTarget(t);
       break;
     default:
       usage();

@@ -2,14 +2,14 @@
 # agentctl: install every Herdr mod, layout and integration in this repo
 # (macOS and Linux; on Windows use install.ps1). The work happens in install.mjs (Node 18+).
 #
-#   ./install.sh [command] [target] [agent]
+#   ./install.sh [command] [target] [plugin] [agent]
 #     install    copy into Herdr's home (default command)
 #     status     what's installed, and whether it matches the repo
 #     watch      re-copy whenever a source file changes (Ctrl-C to stop)
 #     uninstall  remove what this repo installed (layouts are left alone)
-#   targets: all (default) | git | minimal | sidebar | usage | peruse | agents
-#   agents is opt-in and never part of `all` (the Claude Code plugin and pi extension):
-#   `install agents [claude|pi]` opts in, `uninstall agents [claude|pi]` opts out.
+#   targets: all (default) | git | minimal | sidebar | usage | peruse | plugins | links
+#   plugins and links are opt-in and never part of `all`: `install plugins <name> [claude|pi]`
+#   opts a coding-agent plugin in, `uninstall plugins [name] [claude|pi]` opts out.
 #
 # Without a clone, bootstrap with:
 #   curl -fsSL https://raw.githubusercontent.com/amey-P/devtools/main/install.sh | bash                    # clone + install all
