@@ -12,3 +12,4 @@ gleam_json = ">= 3.1.0 and < 4.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.11.0 and < 2.0.0"
+qcheck = ">= 1.0.5 and < 2.0.0"

@@ -111,3 +111,94 @@ Baseline shots (rail strip, 52 px wide): `docs/baseline/rail-3spaces.png` (the u
 - `sil.replace("/>", …)` replaces only the first match: ported with `string.split_once`, not `string.replace` (each silhouette has exactly one `/>`, but this keeps the semantics).
 - **Tests (`parity/geo.test.js`, 17 tests):** for each of the 6 families plus `auto`, all **10,000** corpus (b) rows for that request (family, file name via `geo_file`, sha256/16 of the SVG): **70,000 rows**, all matching. Plus the full-text diff of the first 200 names per request (1,400 SVGs) against `geo-full.json`. Plus 5,000 fast-check `shape` cases against the oracle's private `shape`, 300 names × 8 odd family strings and `None` against the oracle `geoIcon`/`geoFile`, and 3,000 arbitrary seeds. `parity/gleam.js` gained `G.some` (JS value → Gleam Option). `test/geo_test.gleam` pins 3 file names and the family fallback in gleeunit.
 - **The tests can fail:** drawing the rings `chance(0.5)` for every outer shape (the short-circuit removed) turned rings, auto and the oracle-comparison tests red (6 failures). Reverted.
+
+## Phase 6: state machine and explorer (2026-11-23)
+
+Files: `src/space_icons/model.gleam` (types), `src/space_icons/update.gleam` (`init`, `update`, `needed_files`), `test/explorer_test.gleam` (BFS explorer), `test/update_test.gleam` (unit tests + qcheck property). **No new FFI** (still 11 of 12). **One new dev dependency:** `qcheck >= 1.0.5 and < 2.0.0` (approved in the plan). It brings in its own deps `exception`, `gleam_regexp`, `gleam_yielder` and `prng`, all dev-only.
+
+### Types (shape of spec §6.1, names tightened)
+
+- `Flags(mod_name, app_home)`: everything the shell supplies at start. Every path comes from these: overrides `${app_home}/mods/${mod}/overrides.json`, geo dir `${app_home}/mods/${mod}/geo`, svg path `mods/${mod}/geo/<file>` (`update.geo_rel`). Nothing is hard-coded.
+- `Snapshot(spaces: List(Space), theme: Dict(String, String), window: Option(Window))` with `Window(platform, fullscreen)`. **Rejected:** §6.1's `macos_lights: Bool`. Working out `platform == "macos" && !fullscreen` in the shell would be mod logic (G5), so the core does it in phase 7. `None` = `window()` returned null (a golden (c) axis).
+- `Overrides = OverridesLoading | OverridesReady(glyphs.Overrides)`, `GeoDir = DirUnknown | DirListed(ready: Set(String))`, `GeoFile(key: "seed|family", file, svg)`.
+- `State(flags, overrides, geo, in_flight: Set(String), known: Dict(String, GeoFile))`. `flags` is added to §6.1's shape because `WriteFile` and the Log texts need the paths.
+- `Event`: `OverridesRead(Result(Option(String), String))` (`Ok(None)` = `readTextFile` returned null), `GeoDirListed(Result(List(String), String))`, `Tick(needed: List(GeoFile))`, `Written(file, Result(Nil, String))`, `ClickedSpace(id)`, `RightClickedSpace(id)`, `ClickedNewSpace`.
+- `Effect`: `ReadText(path)`, `MkdirAndList(dir)`, `WriteFile(path, file, content)`, `RunCommand(name, args: Option(Json))`, `OpenOverlay(spec: Json)`, `Log(message)`. `WriteFile` carries `file` so the shell can answer with `Written(file, ..)` without parsing the path. `RunCommand` args are an `Option`: `run("space.new")` passes **no** second argument, and `None` keeps that difference visible. **Rejected:** typed command variants (`SpaceSelect(id)` …). The shell would need to know them, which breaks G5. `gleam/json` keeps the shell generic, and its key order is the oracle's literal order.
+
+### `update`
+
+- `case state.overrides, state.geo, event` (multi-subject case) with **no `_`, no variable catch-all and no other wildcard** anywhere in `update`. An arm that doesn't care about a part lists every constructor of that part (`OverridesLoading, … | OverridesReady(..), …`). Fields are ignored with `..`, not `_`. All 28 combinations are spelled out.
+- **I1, and the write gate:** writes happen only in `OverridesReady, DirListed`. The oracle's `loaded` flag means both, because its `load()` runs after the overrides read in the same spawn. Our `ReadText` and `MkdirAndList` run in parallel, so the core needs both conditions. A Tick in any other combination only memoizes its files into `known`.
+- **I2:** `write_missing` skips a file that is ready, already in flight, or earlier in the same Tick. The old duplicate write (a render re-queues a file while its write is still running) is gone.
+- **I4:** `Written(f, Error(e))` → `f` leaves `in_flight`, `ready` is untouched, `Log("geo: write ${f}: ${e}")`. The next Tick writes it again. `Written(f, Ok)` → `f` leaves `in_flight` and joins `ready`, even when `f` was not in flight (the write did land). It is ignored before the listing, which I1 makes unreachable.
+- **I5:** `OverridesRead` while `Loading`: `Ok(None)` → empty; `Ok(Some(text))` → `decode_overrides` (empty text → empty); a decode error or `Error(e)` → empty + exactly one `Log("space-icons: overrides.json: ${e}")`. The `space-icons:` prefix is the old **literal** text (it does not follow `mod_name`), per "Log texts stay as they are". A second `OverridesRead` is ignored, because hot reload is a non-goal (spec §4). A possible future change: accept it while `Ready`.
+- `GeoDirListed(Error(e))` → `DirListed(empty)` + `Log("geo: ${dir}: ${e}")` (Phase 0 finding). A second listing is ignored.
+- **I7:** each of the three UI events returns the same state and exactly one effect in every combination: `RunCommand("space.select", {"id"})`, `RunCommand("space.new", None)`, `OpenOverlay({"mod":"menu","kind":"popup","width":200,"height":260,"props":{"tab":"space","target":{"id"}}})`. These are the oracle's arguments.
+- **Notify on change:** `State` holds only data (no functions, no Json), so `==` is structural. Gleam's Dict and Set compare by content: `update_test.structural_equality_test` builds equal states in different insertion orders. The shell calls `cx.notify()` only when `new != old`. There is one difference from the oracle: a Tick that starts writes changes `in_flight`, so it notifies once. That render changes nothing visible, and the view does not read `in_flight`. **Rejected:** a `changed: Bool` returned from `update`. It is redundant with `==` and easy to get wrong.
+
+### Tick source: `needed_files(State, Snapshot) -> List(GeoFile)`
+
+- Pure. The shell calls it every 150 ms with a fresh snapshot, then calls `update(Tick(needed))`. `render` never mutates.
+- It returns the geo files the rail would draw that `update` still has to act on: **not ready** (all of them while the dir is unknown), **or not yet in `known`**. The result is deduped by file, in rail order, and pinned Lucide glyphs are skipped. The "not yet in `known`" part goes beyond "not ready". Without it, a file that is already on disk at start-up would never be memoized, and both `needed_files` and phase 7's `view` would regenerate its SVG on every tick and render. After one Tick it drops out of the list. A Tick that only re-memoizes the same entries leaves the state equal, so the shell does not notify.
+- **While overrides are `Loading` it returns `[]`.** In the oracle, render queues files with the overrides it has (`{}` before the read), but nothing is written before `loaded`, and `loaded` comes after the overrides read. So the only effect of the pre-read queue is that the oracle also writes the files for the *empty-override* icon of every overridden name: orphan files that are never drawn. Nothing visible changes, because the empty-box phase still happens: phase 7's view uses empty overrides while `Loading`, and nothing is ready yet. **Rejected:** computing with empty overrides while `Loading`. With our parallel reads, a listing that arrives before the overrides read would then write those orphan files.
+- `known` is filled in `update` on every Tick (geocache.js `made`). Its key is `seed|family`, with `None` written as `""` as in the oracle (`family ?? ""`).
+
+### Explorer (`test/explorer_test.gleam`)
+
+- **Domain:** a name pool of 3 (`alpha`, `Beta`, `Rocket Ship`). Snapshots are all 40 lists of 0–3 spaces over the pool, so 2-name rails and duplicate names are included.
+- There are 3 overrides runs:
+  - absent: `Ok(None)`.
+  - present: `Beta` is pinned to `rocket`, and `" ROCKET SHIP "` gets seed `zzz` and family `rings`, which also exercises key trim and lowercase.
+  - failed: both a read error and undecodable text, in all orders.
+- **Events in every state:**
+  - the run's reads.
+  - 3 listings: ok, ok with `alpha`'s file and `junk.txt` already on disk, and failed.
+  - one Tick per snapshot with the **current** `needed_files`, plus one with the full list doubled and one stale Tick carrying the whole file universe.
+  - `Written` Ok and Error for all 4 files of the universe, at any time and any number of times (duplicate and out-of-order answers).
+  - the 3 UI events.
+- States are deduped by a canonical key (sorted sets and the `known` keys).
+- **Checks:**
+  - I1, I2, I4, I5 and I7 on every transition. I4 includes "a Tick right after the failure writes it again".
+  - I3 on every newly reached state: settle the pending reads, Tick each distinct name set, answer every in-flight file with `Ok`. Then every drawn file must be ready and `needed_files` must be `[]`.
+  - The `init` effects are asserted once.
+- **Counts:**
+
+  ```
+  explorer: overrides absent: 517 states, 12981 transitions
+  explorer: overrides present: 303 states, 5968 transitions
+  explorer: overrides failed: 517 states, 13498 transitions
+  explorer: total 1337 states, 32447 transitions
+  ```
+
+  The whole `gleam test` run takes about 1 s.
+- **qcheck:** `no_duplicate_write_property_test`: 500 random sequences of up to 60 events from a 20-event table (Ticks computed from the current state). It checks that no WriteFile is issued for a file that is outstanding (written, no answer yet), in flight or ready. Removing the `in_flight` check in `write_missing` falsifies it, together with the explorer (`I2: the same file written twice in one transition`) and a unit test. That change was reverted.
+
+### Mutation proof
+
+**I1 guard removed:** the arm `OverridesReady(..), DirUnknown, Tick(needed)` was made to call `write_missing(…, set.new(), needed)`. `gleam test`:
+
+```
+panic test/explorer_test.gleam:498
+ test: explorer_test.explorer_test
+ info: explorer (absent) at R0|U|F[]|K[] --Tick([10ji174.svg])-->
+  I1: WriteFile before the geo dir is listed
+19 passed, 1 failures
+```
+
+It was restored from a byte copy, and `cmp` against the copy showed no difference. `gleam test` is green again.
+
+**Dummy `Event` variant added** (`Dummy` after `ClickedNewSpace`). `gleam build`:
+
+```
+error: Inexhaustive patterns
+    ┌─ src/space_icons/update.gleam:62:3
+ 62 │ ╭   case state.overrides, state.geo, event {
+The missing patterns are:
+
+    OverridesLoading, DirUnknown, model.Dummy
+    OverridesLoading, DirListed(ready:), model.Dummy
+    OverridesReady(_), DirUnknown, model.Dummy
+    OverridesReady(_), DirListed(ready:), model.Dummy
+```
+
+It was reverted the same way (a `cmp`-verified copy), and the build is clean.
