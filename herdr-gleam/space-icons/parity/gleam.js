@@ -13,6 +13,9 @@ G.list = (xs) => prelude.toList(xs);
 G.array = (l) => l.toArray();
 G.prelude = prelude;
 
+const option = await import(/* @vite-ignore */ new URL("../gleam_stdlib/gleam/option.mjs", BASE).href);
+/** A JS value (null/undefined = None) as a Gleam Option. @param {unknown} v */
+G.some = (v) => (v == null ? new option.None() : new option.Some(v));
 /** A Gleam Option as a JS value or null. @param {any} o */
 G.opt = (o) => (o && o.constructor && o.constructor.name === "Some" ? o[0] : null);
 /** A Gleam Result as { ok } or { error }. @param {any} r */
