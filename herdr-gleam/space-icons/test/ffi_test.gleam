@@ -1,5 +1,9 @@
 //// One test per FFI function (src/space_icons/ffi/js.mjs), on the values that make JS and Gleam differ.
 
+import gleam/dynamic
+import gleam/dynamic/decode
+import gleam/json
+import gleam/list
 import space_icons/js
 
 pub fn utf16_units_test() {
@@ -56,4 +60,32 @@ pub fn to_base36_test() {
   assert js.to_base36(0) == "0"
   assert js.to_base36(35) == "z"
   assert js.to_base36(4_294_967_295) == "1z141z3"
+}
+
+fn parse(text: String) -> dynamic.Dynamic {
+  let assert Ok(v) = json.parse(text, decode.dynamic)
+  v
+}
+
+fn keys(text: String) -> List(String) {
+  js.entries(parse(text)) |> list.map(fn(e) { e.0 })
+}
+
+pub fn entries_test() {
+  // JS property order: integer-like keys ascending first, then insertion order. "1 " is not integer-like.
+  assert keys("{\"b\":1,\"2\":2,\"a\":3,\"1\":4,\"1 \":5}")
+    == ["1", "2", "b", "a", "1 "]
+  // Values come through untouched.
+  let assert [#("k", v)] = js.entries(parse("{\"k\":7}"))
+  assert decode.run(v, decode.int) == Ok(7)
+  // An array has index keys; a string has one index key per UTF-16 unit, valued by that unit.
+  assert keys("[10,20]") == ["0", "1"]
+  let assert [#("0", a), #("1", b)] = js.entries(dynamic.string("ab"))
+  assert decode.run(a, decode.string) == Ok("a")
+  assert decode.run(b, decode.string) == Ok("b")
+  assert keys("\"\u{1F680}\"") == ["0", "1"]
+  // A number, a bool or an empty object has none.
+  assert keys("12") == []
+  assert keys("true") == []
+  assert keys("{}") == []
 }

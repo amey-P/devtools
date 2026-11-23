@@ -1,5 +1,7 @@
 //// Bindings for ffi/js.mjs, the core's only FFI. Every other module reaches JS through here.
 
+import gleam/dynamic.{type Dynamic}
+
 /// The string's UTF-16 code units (`charCodeAt`), as the oracle's fnv1a hashes them.
 @external(javascript, "./ffi/js.mjs", "utf16_units")
 pub fn utf16_units(s: String) -> List(Int)
@@ -36,3 +38,8 @@ pub fn pi() -> Float
 /// `n.toString(36)`
 @external(javascript, "./ffi/js.mjs", "to_base36")
 pub fn to_base36(n: Int) -> String
+
+/// `Object.entries(x)`, in JS property order: integer-like keys ascending, then insertion order.
+/// Throws on null/undefined, so callers must guard first.
+@external(javascript, "./ffi/js.mjs", "entries")
+pub fn entries(x: Dynamic) -> List(#(String, Dynamic))

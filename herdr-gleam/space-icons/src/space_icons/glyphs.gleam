@@ -4,10 +4,10 @@
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import space_icons/js
 import space_icons/jstext
 
 /// 64 Lucide icons (icons/<name>.svg, ISC). Order matters: an override's index picks from it. Append only.
@@ -80,22 +80,15 @@ fn parse_error(e: json.DecodeError) -> String {
   }
 }
 
-/// `Object.entries(root)`, in order. A string root gives per-character entries whose values are
-/// strings, which have no fields, so it is the same as no entries.
+/// `Object.entries(root)`, in JS property order, so a later entry that normalizes to the same key
+/// wins as in the oracle. Guarded so it never throws: null is the oracle's TypeError; a number or
+/// bool has no entries; an object, an array (index keys) or a string (per-character index keys
+/// with string values, which have no effect) goes to `Object.entries`.
 fn root_entries(root: Dynamic) -> Result(List(#(String, Dynamic)), String) {
-  case decode.run(root, decode.dict(decode.string, decode.dynamic)) {
-    // TODO(phase 4 gate): a Dict loses JS property order, which only matters when two keys
-    // normalize to the same name. See docs/decisions.md.
-    Ok(d) -> Ok(dict.to_list(d))
-    Error(_) ->
-      case decode.run(root, decode.list(decode.dynamic)) {
-        Ok(xs) -> Ok(list.index_map(xs, fn(x, i) { #(int.to_string(i), x) }))
-        Error(_) ->
-          case dynamic.classify(root) {
-            "Nil" -> Error("TypeError: Cannot convert undefined or null to object")
-            _ -> Ok([])
-          }
-      }
+  case dynamic.classify(root) {
+    "Nil" -> Error("TypeError: Cannot convert undefined or null to object")
+    "Object" | "Array" | "String" -> Ok(js.entries(root))
+    _ -> Ok([])
   }
 }
 

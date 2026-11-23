@@ -20,9 +20,6 @@ function decode(text) {
   return r.error !== undefined ? { overrides: glyphs.no_overrides(), logs: [r.error] } : { overrides: r.ok, logs: [] };
 }
 
-/** Collisions after trim+lowercase need JS property order; see docs/decisions.md (phase 2, finding 1). */
-const ORDER_DEPENDENT = new Set(["collision: last written wins", "collision: reversed", "collision: index key sorts first"]);
-
 describe("JS string semantics", () => {
   const ws = [" ", "\t", "\n", "\v", "\f", "\r", " ", " ", " ", " ", " ", " ", " ", " ", " ", "　", "﻿", "᠎", "​", "\u0085", "‎", "‏"];
   const unit = fc.oneof(fc.constantFrom(...ws), fc.integer({ min: 0, max: 0xffff }).map((c) => String.fromCharCode(c)), fc.constantFrom("a", "Z", "🚀", "é"));
@@ -48,8 +45,7 @@ describe("corpus (a)", () => {
 
 describe("override cases", () => {
   for (const c of cases) {
-    const t = ORDER_DEPENDENT.has(c.note) ? test.fails : test;
-    t(c.note, () => {
+    test(c.note, () => {
       const { overrides, logs } = c.fail ? { overrides: glyphs.no_overrides(), logs: ["read failed"] } : decode(c.text);
       expect(row(glyphs.icon_for(c.name, overrides))).toEqual(c.icon);
       expect(logs.length).toBe(c.logs.length);
