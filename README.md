@@ -10,7 +10,7 @@ One repo for everything custom around my coding agents: mods, layouts and agent 
 | `herdr-usage/` | Agent usage widget at the bottom of the minimal layout's sidebar, plus its settings page (ctrl-shift-u) (see below) | `mods/agent-usage`, `mods/usage-settings` |
 | `herdr-peruse/` | Peruse mods: read and annotate any markdown (agent docs, plans, quick decisions), its inbox and settings | `mods/peruse`, `mods/peruse-inbox`, `mods/peruse-settings`, plus `mods/review` (a shim for the old name; see [its README](herdr-peruse/README.md)) |
 | `plugins/` → *plugins* (opt-in) | Coding-agent plugins, each installable into several agents. `plugins/peruse`: peruse's Claude Code plugin (hooks, skill) and pi extension, from one folder ([README](plugins/peruse/README.md)) | Claude Code's `agentctl` marketplace, pi's settings |
-| `agents/` → *links* (opt-in) | pi powerline statusline extension, Claude Code statusline, custom skills (`explainer`, `git`), symlinked so edits apply at once | `~/.pi/agent/extensions/`, `~/.claude/statusline.sh`, `~/.agents/skills/` |
+| `agents/` → *links* (opt-in) | pi powerline statusline extension, Claude Code statusline, custom skills (`explainer`, `git`, `andragogy`), symlinked so edits apply at once | `~/.pi/agent/extensions/`, `~/.claude/statusline.sh`, `~/.agents/skills/` (`andragogy` also `~/.claude/skills/`) |
 | `herdr-subagents-mcp/` | Rust MCP server pi uses to spawn and steer herdr subagents (build with `cargo build --release`) | referenced from `~/.pi/agent/mcp.json` |
 
 `HERDR_APP_HOME` defaults to `~/.config/herdr-app`.

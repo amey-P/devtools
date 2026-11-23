@@ -28,6 +28,8 @@ export const LINKS = [
   { src: "agents/pi/extensions/powerline-statusline", dst: join(H, ".pi", "agent", "extensions", "powerline-statusline") },
   { src: "agents/skills/explainer", dst: join(H, ".agents", "skills", "explainer") },
   { src: "agents/skills/git", dst: join(H, ".agents", "skills", "git") },
+  { src: "agents/skills/andragogy", dst: join(H, ".agents", "skills", "andragogy") },
+  { src: "agents/skills/andragogy", dst: join(H, ".claude", "skills", "andragogy") },
 ];
 
 /** @param {string} p */
