@@ -4,11 +4,7 @@
 // and JS property order (`Object.entries`).
 import { toList } from "../../gleam.mjs";
 
-export function utf16_units(s) {
-  const out = [];
-  for (let i = 0; i < s.length; i++) out.push(s.charCodeAt(i));
-  return toList(out);
-}
+export const utf16_units = (s) => toList(Array.from({ length: s.length }, (_, i) => s.charCodeAt(i)));
 export const imul = (a, b) => Math.imul(a, b);
 export const to_u32 = (x) => x >>> 0;
 export const to_i32 = (x) => x | 0;

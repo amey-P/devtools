@@ -1,7 +1,7 @@
 // Fake "herdr" module. Tests set `fake` (spaces, theme, window, files, checking) before a run and
 // read `fake.log` after. `capture(fn)` runs a handler once and returns what it did.
 
-/** @typedef {{ id: string, name: string, status: string, active: boolean, machine: string | null }} FakeSpace */
+/** @typedef {{ id: string, name: string, status: string | null, active: boolean, machine: string | null }} FakeSpace */
 
 export const fake = {
   /** @type {FakeSpace[]} */ spaces: [],

@@ -49,8 +49,14 @@ folder removes it. For the cutover itself and how to undo it, see `docs/cutover.
 
 ## Behaviour notes
 
-- `overrides.json` is read once, at start (no hot reload, as before). Keys are trimmed and
+- `overrides.json` is read once per mod start. Saving it still takes effect: Herdr reloads the
+  mod when any file in its folder changes, as with the old mod. Keys are trimmed and
   lowercased. `glyph` pins a Lucide icon (by name or index), `seed` re-rolls, and `family`
   forces one of `tiles radial rings stripes orbit overlap`.
 - Geometric icons are written to `mods/$MOD_NAME/geo/<hash>.svg` by a 150 ms tick, only after
   the folder is listed. A cell shows an empty 17 px box until its file is on disk.
+- Adding a geo family to the list changes most auto-picked icons and their file names: the
+  family is drawn by index into that list. A family in the list without its own branch in `geo.gleam` silently
+  draws as `overlap` (the dispatch ends in `_ -> overlap(r)`).
+- `MOD_NAME` is baked in at build time. A bundle copied into a different folder reads and writes
+  the folder it was built for.
