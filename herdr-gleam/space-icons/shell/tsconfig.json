@@ -1,0 +1,26 @@
+{
+  "// why": [
+    "Type-checks the shell against the installed Herdr API (spec: reference the .d.ts files, never copy them).",
+    "The paths point at ~/.config/herdr-app relative to this folder; Herdr rewrites those files on each start.",
+    "Options follow agentctl's tsconfig.mod.json (strictNullChecks off: view state is assigned in init).",
+    "The Gleam core's types come from the .d.mts files `gleam build` writes next to its .mjs output."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": [],
+    "strict": true,
+    "strictNullChecks": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "herdr": ["../../../../../../.config/herdr-app/herdr.d.ts"]
+    }
+  },
+  "files": ["../../../../../../.config/herdr-app/gpui-kit.d.ts"],
+  "include": ["*.ts"],
+  "exclude": ["*.test.ts"]
+}

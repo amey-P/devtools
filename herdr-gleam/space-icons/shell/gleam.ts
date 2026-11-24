@@ -30,9 +30,8 @@ export interface App<S, Ev> {
   changed(a: S, b: S): boolean;
 }
 
-interface GleamList {
-  readonly __gleamList?: never;
-}
+/** A Gleam `List` (walked with the prelude's `List$…` helpers). */
+type GleamList = unknown;
 
 /** The compiled core module (`core.mjs`) plus the prelude (`gleam.mjs`) it was built with. */
 export interface GleamCore {

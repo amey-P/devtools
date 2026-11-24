@@ -5,6 +5,8 @@
   "description": "Gleam core + thin TS shell for the Herdr space-icons mod. See README.md.",
   "scripts": {
     "build": "scripts/build.sh",
+    "install-mod": "scripts/install.sh",
+    "check-mod": "scripts/check.sh",
     "test": "gleam test && vitest run",
     "typecheck": "tsc -p shell --noEmit",
     "golden": "GOLDEN=write vitest run parity/golden.test.js"
