@@ -22,10 +22,15 @@ fn shr_u(x: Int, n: Int) -> Int {
 /// One draw, uniform in [0, 1), and the next state.
 pub fn next(rng: Rng) -> #(Float, Rng) {
   let a = js.to_i32(rng.a + 0x6d2b79f5)
-  let t = js.imul(int.bitwise_exclusive_or(a, shr_u(a, 15)), int.bitwise_or(1, a))
+  let t =
+    js.imul(int.bitwise_exclusive_or(a, shr_u(a, 15)), int.bitwise_or(1, a))
   let t =
     int.bitwise_exclusive_or(
-      t + js.imul(int.bitwise_exclusive_or(t, shr_u(t, 7)), int.bitwise_or(61, t)),
+      t
+        + js.imul(
+        int.bitwise_exclusive_or(t, shr_u(t, 7)),
+        int.bitwise_or(61, t),
+      ),
       t,
     )
   let u = js.to_u32(int.bitwise_exclusive_or(t, shr_u(t, 14)))

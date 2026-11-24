@@ -12,13 +12,15 @@ import space_icons/jstext
 
 /// 64 Lucide icons (icons/<name>.svg, ISC). Order matters: an override's index picks from it. Append only.
 pub const glyphs = [
-  "rocket", "cat", "dog", "fish", "bird", "turtle", "rabbit", "squirrel", "snail", "rat", "bug", "anchor",
-  "leaf", "tree-pine", "flower-2", "sprout", "shell", "mountain", "flame", "snowflake", "moon", "sun",
-  "cloud", "zap", "droplet", "star", "heart", "crown", "ghost", "skull", "bot", "gem", "key", "bell",
-  "umbrella", "guitar", "music", "coffee", "pizza", "ice-cream-cone", "apple", "carrot", "cherry", "plane",
-  "car", "bike", "sailboat", "train-front", "book-open", "hammer", "wrench", "compass", "puzzle",
-  "gamepad-2", "lightbulb", "magnet", "bomb", "trophy", "flag", "shield", "feather", "palette", "telescope",
-  "tent",
+  "rocket", "cat", "dog", "fish", "bird", "turtle", "rabbit", "squirrel",
+  "snail", "rat", "bug", "anchor", "leaf", "tree-pine", "flower-2", "sprout",
+  "shell", "mountain", "flame", "snowflake", "moon", "sun", "cloud", "zap",
+  "droplet", "star", "heart", "crown", "ghost", "skull", "bot", "gem", "key",
+  "bell", "umbrella", "guitar", "music", "coffee", "pizza", "ice-cream-cone",
+  "apple", "carrot", "cherry", "plane", "car", "bike", "sailboat", "train-front",
+  "book-open", "hammer", "wrench", "compass", "puzzle", "gamepad-2", "lightbulb",
+  "magnet", "bomb", "trophy", "flag", "shield", "feather", "palette",
+  "telescope", "tent",
 ]
 
 /// One overrides.json entry, already validated: invalid fields are None (the oracle ignores them).
@@ -44,7 +46,8 @@ pub fn icon_for(name: String, overrides: Overrides) -> Icon {
   let key = jstext.key(name)
   case dict.get(overrides, key) {
     Error(Nil) -> Icon(glyph: None, seed: key, family: None)
-    Ok(o) -> Icon(glyph: o.glyph, seed: option.unwrap(o.seed, key), family: o.family)
+    Ok(o) ->
+      Icon(glyph: o.glyph, seed: option.unwrap(o.seed, key), family: o.family)
   }
 }
 
@@ -106,7 +109,11 @@ fn to_override(v: Dynamic) -> Override {
   }
 }
 
-fn field(fields: Dict(String, Dynamic), name: String, f: fn(Dynamic) -> Option(String)) -> Option(String) {
+fn field(
+  fields: Dict(String, Dynamic),
+  name: String,
+  f: fn(Dynamic) -> Option(String),
+) -> Option(String) {
   case dict.get(fields, name) {
     Ok(v) -> f(v)
     Error(Nil) -> None

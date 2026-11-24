@@ -1,6 +1,7 @@
 //// Bounded breadth-first explorer over the spec §6.3 domain. From `init`, every event in the
 //// domain is applied to every reachable state; states are deduped by a canonical key. Every
-//// transition is checked against I1, I2, I4, I5 and I7, and every reachable state against I3.
+//// transition is checked against I1, I2, I4, I5 and I7, and every reachable state against I3 and
+//// (for every snapshot) I6.
 ////
 //// Domain: names drawn from a pool of 3 (snapshots are every list of 0–3 spaces over the pool, so
 //// 2-name and duplicate-name rails are included); overrides absent, present or failed (read
@@ -27,6 +28,7 @@ import space_icons/model.{
   Written,
 }
 import space_icons/update
+import space_icons/view
 
 // --- domain -----------------------------------------------------------------
 
@@ -417,6 +419,49 @@ pub fn check_live(
   })
 }
 
+/// I6: every `Svg` the view draws is a chrome icon, a pinned Lucide glyph, or a geo file in
+/// `ready`. And the converse that makes the empty-box phase right: every drawn geo file that is
+/// ready is shown (an icon cell has a `Div` box only while its file is not ready).
+pub fn check_view(state: State, snaps: List(Snapshot)) -> List(String) {
+  let rdy = ready(state)
+  list.flat_map(snaps, fn(snap) {
+    let paths = svg_paths(view.view(state, snap))
+    let bad =
+      list.filter(paths, fn(p) {
+        case p {
+          "mods/workspace-chrome/plus.svg"
+          | "mods/workspace-chrome/server.svg" -> False
+          "mods/space-icons-g/icons/" <> glyph ->
+            !list.contains(
+              list.map(glyphs.glyphs, fn(g) { g <> ".svg" }),
+              glyph,
+            )
+          "mods/space-icons-g/geo/" <> file -> !set.contains(rdy, file)
+          _ -> True
+        }
+      })
+    let hidden =
+      set.filter(drawn(state, snap), fn(f) {
+        set.contains(rdy, f)
+        && !list.contains(paths, "mods/space-icons-g/geo/" <> f)
+      })
+    list.flatten([
+      list.map(bad, fn(p) { "I6: drew " <> p <> " (not ready, not a glyph)" }),
+      list.map(set.to_list(hidden), fn(f) {
+        "I6: ready file " <> f <> " is not drawn"
+      }),
+    ])
+  })
+}
+
+fn svg_paths(node: view.Node) -> List(String) {
+  let own = case node.kind {
+    view.Svg(path) -> [path]
+    view.HFlex | view.VFlex | view.Div -> []
+  }
+  list.append(own, list.flat_map(node.children, svg_paths))
+}
+
 // --- search ------------------------------------------------------------------------
 
 pub type Stats {
@@ -440,6 +485,7 @@ pub fn explore(mode: Mode) -> Stats {
     "MkdirAndList(/HOME/mods/space-icons-g/geo)",
   ] = list.map(init_effects, show_effect)
   assert_ok(check_live(mode, start, live_snaps), mode, "init")
+  assert_ok(check_view(start, snaps), mode, "init")
   bfs(
     mode,
     snaps,
@@ -477,6 +523,7 @@ fn bfs(
               True -> #(next, seen, stats)
               False -> {
                 assert_ok(check_live(mode, after, live_snaps), mode, k)
+                assert_ok(check_view(after, snaps), mode, k)
                 #(
                   [after, ..next],
                   set.insert(seen, k),
