@@ -235,3 +235,20 @@ Full report: `docs/phase9-report.md`; rail strips and diffs in `docs/verify/`.
 - **Screenshot method:** the same layout with only the rail's mod swapped, then 2 shots. **Rejected:** both rails side by side in one layout, because the first column renders 40 px and the second 50 px.
 - **Tolerance:** 0 differing pixels outside the pulsing `working` dot (x29–36, y47–54 in the strip). Met in all 4 scenarios. Inside the dot, the differences are animation phase (max channel delta 3–39).
 - **Geo rewrite:** deleting a file under `mods/<mod>/` triggers Herdr's hot reload, so both mods rewrite a deleted geo file at once. There is no difference to log.
+
+## Phase 10: cutover proposal (2026-11-24)
+
+- `docs/cutover.md`: exact cutover and rollback steps, **not run**. Build with `MOD_NAME=space-icons` (verified: the bundle's mount call names `"space-icons"`). Keep the old install as `mods/space-icons-old`. Install, then carry over `overrides.json` (and optionally `geo/`, whose names are identical). The agentctl `install.mjs` change: an optional `build` step on `ModSpec`, and `src: "herdr-gleam/space-icons/dist"`. `herdr-minimal/space-icons` is kept through a soak period. Two rollback paths: a folder swap during the soak, or `git revert` + `node install.mjs minimal`.
+- **Rejected:** committing `dist/main.js` (a generated 154 KB file that can drift from source).
+- `README.md`: build, test, install and roll back.
+
+## Definition of done (spec §11)
+
+- [x] Parity: corpus (a) 10,000 names + 46 override cases, corpus (b) 70,000 geo rows, view set (c) 30 cases + 2 live-shaped SpaceInfo cases.
+- [x] The explorer passes I1–I7 (1,337 states, 32,447 transitions). Mutations: I1 guard (Phase 6), I2 `in_flight` (Phase 6), I6 path guard (Phase 7).
+- [x] `update` has no catch-all. The dummy `Event` variant fails `gleam build` with the missing arms (Phase 6, reverted).
+- [x] `tsc --noEmit` passes. `herdr-app check mods/space-icons-g` passes. `herdr-app status` shows `"errors": []`.
+- [x] Screenshot diffs within tolerance: 0 differing px outside the pulsing `working` dot, in 4 scenarios (`docs/phase9-report.md`).
+- [x] The shell has no space-icons logic. The only mod-specific lines are the core imports in `shell/main.ts`.
+- [x] `README.md` covers build, test, install and rollback. `docs/decisions.md` is complete.
+- [ ] Cutover: waiting for the owner's approval (`docs/cutover.md`).
