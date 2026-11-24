@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { G } from "./gleam.js";
 import { fake, reset } from "./fakes/herdr.js";
 import { tree } from "./fakes/recorder.js";
-import { iconFor, geoFile, decodeOverrides } from "./oracle-run.js";
+import { iconFor, geoFile, decodeOverrides, renderOracle } from "./oracle-run.js";
 import { bindGleam } from "../shell/gleam.ts";
 import { interpret } from "../shell/interpret.ts";
 import { runEffects } from "../shell/effects.ts";
@@ -39,5 +39,39 @@ describe("view set (c)", () => {
     const el = interpret(app.view(state, snap), dispatch);
     expect(tree(el)).toEqual(c.tree);
     expect(fake.log, "render ran no herdr calls").toEqual([]);
+  });
+});
+
+// Real `spaces()` entries (herdr.d.ts SpaceInfo): `status` is null when no agent runs, `machine`
+// is null for this computer, and there are fields the rail does not read. Found live in Phase 9:
+// a string-only status decoder dropped every space. Compared against the oracle rendered live.
+describe("SpaceInfo as Herdr sends it", () => {
+  const theme = views[0].theme;
+  const info = (/** @type {any} */ s) => ({ index: 0, named: false, folder: "/x", branch: null, tabs: [], ...s });
+  const spacesCases = [
+    ["null status", [info({ id: "a", name: "alpha", status: null, active: true, machine: null })]],
+    ["mixed", [
+      info({ id: "a", name: "alpha", status: null, active: false, machine: null }),
+      info({ id: "b", name: "beta", status: "working", active: true, machine: "vps" }),
+      info({ id: "c", name: "_example-lucide", status: "idle", active: false, machine: "" }),
+    ]],
+  ];
+  test.each(spacesCases)("%s", async (_name, spaces) => {
+    const overridesText = views[0].overridesText;
+    const c = { spaces, theme, window: views[0].window, overridesText, readyNames: [/** @type {any} */ (spaces)[0].name] };
+    const expected = await renderOracle(c);
+    const { overrides } = await decodeOverrides(overridesText);
+    const ready = c.readyNames.map((n) => {
+      const ic = iconFor(n, overrides);
+      return geoFile(ic.seed, ic.family);
+    });
+    reset();
+    let state = app.init("space-icons", fake.home).state;
+    state = app.update(state, model.Event$OverridesRead(new Ok(G.some(overridesText)))).state;
+    state = app.update(state, model.Event$GeoDirListed(new Ok(G.list(ready)))).state;
+    /** @param {unknown} ev @param {any} cx */
+    const dispatch = (ev, cx) => runEffects(app.update(state, ev).effects, cx, dispatch);
+    const el = interpret(app.view(state, { spaces, theme, window: c.window }), dispatch);
+    expect(tree(el)).toEqual(expected);
   });
 });

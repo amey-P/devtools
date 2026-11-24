@@ -12,7 +12,13 @@ fn rail(names: List(String)) {
   Snapshot(
     spaces: {
       let mk = fn(n) {
-        Space(id: n, name: n, status: "idle", active: False, machine: None)
+        Space(
+          id: n,
+          name: n,
+          status: Some("idle"),
+          active: False,
+          machine: None,
+        )
       }
       case names {
         [] -> []

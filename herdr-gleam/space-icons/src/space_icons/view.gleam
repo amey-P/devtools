@@ -147,8 +147,9 @@ fn cell(
     Some("") | None -> None
     Some(m) -> Some(m)
   }
-  let loud =
-    s.status == "blocked" || s.status == "done" || s.status == "working"
+  // `LOUD.has(s.status)`: a null status (no agent) is not loud.
+  let status = option.unwrap(s.status, "")
+  let loud = status == "blocked" || status == "done" || status == "working"
   let active_bar = case s.active {
     True -> [
       El(
@@ -193,9 +194,9 @@ fn cell(
             Border2,
             BorderColor(color(t, "chrome")),
             // `t[s.status] ?? t.unknown`
-            Bg(option.or(color(t, s.status), color(t, "unknown"))),
+            Bg(option.or(color(t, status), color(t, "unknown"))),
           ],
-          case s.status == "working" {
+          case status == "working" {
             True -> [LoopOpacity(from: 0.35, to: 1.0, period: 1200)]
             False -> []
           },

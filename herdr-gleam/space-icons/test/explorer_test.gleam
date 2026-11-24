@@ -78,7 +78,7 @@ pub fn snapshot(rail: List(String)) -> Snapshot {
       Space(
         id: "s" <> int.to_string(i),
         name: name,
-        status: "idle",
+        status: Some("idle"),
         active: False,
         machine: None,
       )

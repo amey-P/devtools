@@ -135,7 +135,11 @@ pub fn decode_snapshot(raw: Dynamic) -> Snapshot {
   let space = {
     use id <- decode.field("id", decode.string)
     use name <- decode.field("name", decode.string)
-    use status <- decode.field("status", decode.string)
+    use status <- decode.optional_field(
+      "status",
+      None,
+      decode.optional(decode.string),
+    )
     use active <- decode.field("active", decode.bool)
     use machine <- decode.optional_field(
       "machine",

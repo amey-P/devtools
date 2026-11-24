@@ -226,3 +226,12 @@ Files: `shell/runtime.ts` (generic View: init/dispatch/render), `shell/snapshot.
 - **Tests (`shell/shell.test.ts`, 7):** check mode makes no herdr/fs call, starts no timer and runs no handler effect; init reads overrides and lists the folder, with one 150 ms timer through `cx.timer.every`; a tick writes each missing file once (duplicate names collapse), then notifies, and a quiet tick neither writes nor notifies; a failed write logs once and is written again on the next tick (I4); boot + tick renders the oracle's tree for two golden cases (7 spaces on macOS, 1 space with a null window).
 - **The tests can fail:** dropping the `checking()` guard in `runEffects` failed "a handler runs no effect". An unconditional `cx.notify()` in dispatch failed the quiet-tick test and both oracle-tree tests: the handler labels then contain `cx.notify`, so a click that re-renders for nothing is visible to the parity check. Both reverted from `cmp`-verified copies.
 - **Gate:** `npm run typecheck` passes, `npm test` = 23 gleeunit + 115 Vitest tests green, `herdr-app check dist` → `check passed`. Bundle: 154 KB.
+
+## Phase 9: live verification (2026-11-24)
+
+Full report: `docs/phase9-report.md`; rail strips and diffs in `docs/verify/`.
+
+- **`Space.status: Option(String)`** (was `String`). Herdr's `SpaceInfo.status` is `Status | null`: a phase 0 recon miss. The string-only decoder dropped the whole rail on the first live run. `None` is not loud, as `LOUD.has(null)`. Red first: `parity/view.test.js` › "SpaceInfo as Herdr sends it" (2 cases against the live oracle). The decoder stays all-or-nothing for a malformed space (wrong `id`/`name`/`active` type), because the oracle would render such a space anyway, so dropping it would also be a difference. The nullable fields (`status`, `machine`) are the only ones the API allows to be null.
+- **Screenshot method:** the same layout with only the rail's mod swapped, then 2 shots. **Rejected:** both rails side by side in one layout, because the first column renders 40 px and the second 50 px.
+- **Tolerance:** 0 differing pixels outside the pulsing `working` dot (x29–36, y47–54 in the strip). Met in all 4 scenarios. Inside the dot, the differences are animation phase (max channel delta 3–39).
+- **Geo rewrite:** deleting a file under `mods/<mod>/` triggers Herdr's hot reload, so both mods rewrite a deleted geo file at once. There is no difference to log.

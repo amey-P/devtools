@@ -17,12 +17,13 @@ pub type Flags {
   Flags(mod_name: String, app_home: String)
 }
 
-/// One space as `spaces()` reports it (only the fields the rail uses).
+/// One space as `spaces()` reports it (only the fields the rail uses). `status` is the most urgent
+/// agent status in the space, `None` when Herdr reports null (no agent).
 pub type Space {
   Space(
     id: String,
     name: String,
-    status: String,
+    status: Option(String),
     active: Bool,
     machine: Option(String),
   )
